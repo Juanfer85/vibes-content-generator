@@ -91,6 +91,25 @@ async function resetSceneTimeout(delayInMinutes: number) {
   browser.alarms.create(Alarms.SceneTimeout, { delayInMinutes });
 }
 
+// Turn whatever made a scene's send fail into a message the user can act on.
+// Two distinct failure shapes reach the catch below:
+//   1. tabs.sendMessage itself rejects — the content script isn't listening
+//      in the target tab (extension just (re)loaded and the vibes.ai tab was
+//      never reloaded, or the active tab isn't vibes.ai at all). Chrome
+//      phrases this as "Receiving end does not exist".
+//   2. The content script answered { success: false, error } with a concrete
+//      reason (mode switch failed, composer not found, start frame upload
+//      failed...) — thrown as an Error carrying that exact string.
+// Either way, surfacing the specific reason beats the old generic line, which
+// hid whether the fix was "reload the tab" vs "vibes.ai's UI didn't load".
+function describeSendFailure(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (/Receiving end does not exist|Could not establish connection/i.test(msg)) {
+    return 'la extensión no está activa en esta pestaña — recarga vibes.ai y reintenta';
+  }
+  return msg;
+}
+
 function buildFillPromptMessage(scene: SceneInput): FillPromptMessage {
   if (scene.kind === BatchModes.Image) {
     return {
@@ -146,7 +165,7 @@ async function processScene(index: number) {
     if (!response?.success) {
       throw new Error(response?.error ?? 'fill_prompt failed');
     }
-  } catch {
+  } catch (err) {
     await browser.alarms.clear(Alarms.SceneTimeout);
     if (batch) {
       batch.sceneStatuses[scene.sceneNumber] = SceneStatuses.Error;
@@ -159,7 +178,7 @@ async function processScene(index: number) {
       const nextIdx = index + 1;
       log({
         sceneNumber: scene.sceneNumber,
-        step: 'No se pudo enviar el prompt, saltando escena',
+        step: `No se pudo enviar el prompt: ${describeSendFailure(err)}`,
         kind: LogKinds.Error,
         cooldownMs: retryDelayMs,
       });
