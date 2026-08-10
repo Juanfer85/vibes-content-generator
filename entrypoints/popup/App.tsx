@@ -311,7 +311,7 @@ export default function App() {
 
   return (
     <div id="app">
-      <h1>OmniFlow AI</h1>
+      <h1>Content Generator</h1>
 
       <div className="mode-tabs">
         <button className={mode === 'single' ? 'active' : ''} onClick={() => setMode('single')}>
