@@ -64,14 +64,38 @@ export default function BatchMode({
     grantedHandleRef.current = handle;
     setStatusMsg('');
 
+    await storeProjectHandle(handle);
+
+    let rawText: string;
     try {
-      await storeProjectHandle(handle);
       const scriptFile = await (await handle.getFileHandle(ProjectFiles.Script)).getFile();
-      const { scenes } = JSON.parse(await scriptFile.text()) as { scenes: SceneData[] };
-      setBatchScenes(scenes);
-      setCompletedScenes(await readCompletedScenes(handle, batchType));
+      rawText = await scriptFile.text();
     } catch {
-      setStatusMsg('No se pudo leer script.json del proyecto.');
+      setStatusMsg(
+        `No se encontró "${ProjectFiles.Script}" en la carpeta. Revisa que el nombre del archivo esté bien escrito.`
+      );
+      return;
+    }
+
+    let parsed: { scenes: SceneData[] };
+    try {
+      // Tolerate AI output pasted with a ```json fence around it.
+      const cleaned = rawText.trim().replace(/^```json\s*|^```\s*|```$/g, '');
+      parsed = JSON.parse(cleaned) as { scenes: SceneData[] };
+    } catch (err: unknown) {
+      setStatusMsg(
+        `El archivo ${ProjectFiles.Script} no es un JSON válido: ${err instanceof Error ? err.message : String(err)}`
+      );
+      return;
+    }
+
+    try {
+      setBatchScenes(parsed.scenes);
+      setCompletedScenes(await readCompletedScenes(handle, batchType));
+    } catch (err: unknown) {
+      setStatusMsg(
+        `Error leyendo el progreso del proyecto: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
   };
 
@@ -134,7 +158,7 @@ export default function BatchMode({
   // Fire-and-forget: background owns the running batch, popup just notifies
   // and doesn't care if the message fails to land (e.g. popup closing).
   const notifyBackground = (message: object) =>
-    browser.runtime.sendMessage(message).catch(() => {});
+    browser.runtime.sendMessage(message).catch(() => { });
 
   const stopBatch = () => {
     onBatchStop();
