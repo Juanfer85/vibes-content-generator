@@ -3,9 +3,11 @@ export const ComposerSelectors = {
 } as const;
 
 export const GallerySelectors = {
-  // Each generated thumbnail card; while media is still rendering the card
-  // holds a <canvas> skeleton instead of the real <img>/<video>, so presence
-  // of a loaded img[data-nimg="fill"] or video[src] is what marks it "ready".
+  // Each generated thumbnail card. Presence of a loaded img[data-nimg="fill"]
+  // or video[src] is what marks it "ready"; until then the card holds a
+  // skeleton (a div with anim_pulse, NOT a <canvas> as previously documented).
+  // In video mode that skeleton does not resolve on its own — see nudgeGallery
+  // in content.ts.
   Thumbnail: '[data-analytics-id="creation_gallery.thumbnail_click"]',
 } as const;
 

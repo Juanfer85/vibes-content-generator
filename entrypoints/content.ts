@@ -153,11 +153,21 @@ function dataURLtoFile(dataurl: string, filename: string): File {
 // `text` accepts an array so callers can pass the known en/es translations —
 // the only 2 UI languages vibes.ai currently ships — instead of a single
 // locale-fixed string.
+//
+// Matching ignores accents and case. An exact comparison meant one missing
+// tilde silently broke a whole run: the constant said 'Añadir al vídeo' while
+// vibes.ai renders 'Añadir al video'. That button is also how the start-frame
+// dialog is identified, so failing to find it made the dialog unresolvable,
+// which made the image count read 0, which made the uploader wait forever for
+// a growth that had already happened. One accent, and a batch that stalls on
+// every scene with no error to show for it.
 function findButtonByText(scope: ParentNode, text: string | string[]): HTMLButtonElement | null {
-  const candidates = Array.isArray(text) ? text : [text];
+  const candidates = (Array.isArray(text) ? text : [text]).map((t) =>
+    stripAccents(t).toLowerCase()
+  );
   return (
     Array.from(scope.querySelectorAll<HTMLButtonElement>('button')).find((btn) =>
-      candidates.includes(btn.textContent?.trim() ?? '')
+      candidates.includes(stripAccents(btn.textContent?.trim() ?? '').toLowerCase())
     ) ?? null
   );
 }
@@ -187,9 +197,17 @@ function resolveDialogByHeadingSync(
   headingText: string | string[],
   isDone: (node: HTMLElement) => boolean
 ): HTMLElement | null {
-  const candidates = Array.isArray(headingText) ? headingText : [headingText];
+  // Accent- and case-insensitive for the same reason as findButtonByText: a
+  // single tilde difference between the constant and what vibes.ai renders is
+  // enough to make a dialog unfindable, and the failure surfaces far away from
+  // its cause.
+  const candidates = (Array.isArray(headingText) ? headingText : [headingText]).map((t) =>
+    stripAccents(t).toLowerCase()
+  );
   const heading = Array.from(document.querySelectorAll<HTMLElement>('div,span,h1,h2,h3')).find(
-    (el) => candidates.includes(el.textContent?.trim() ?? '') && el.children.length === 0
+    (el) =>
+      candidates.includes(stripAccents(el.textContent?.trim() ?? '').toLowerCase()) &&
+      el.children.length === 0
   );
   if (!heading) return null;
   let node: HTMLElement | null = heading.parentElement;
@@ -648,6 +666,25 @@ function getReadyThumbnails(): ReadyThumbnail[] {
   return result;
 }
 
+// The "what was already here" snapshot must cover EVERY card, not just the
+// loaded ones. getReadyThumbnails() skips anything still showing its skeleton,
+// so any older thumbnail that happens to be unpainted right now is missing
+// from the baseline — and the moment it does paint, findNewBatch() counts it
+// as freshly generated and downloads an old image as if it were this scene's.
+//
+// Thumbnails sit unpainted for reasons outside our control: a project whose
+// /api/sync/stream is answering 500 leaves the entire gallery grey. So the
+// baseline must not depend on paint state at all. The card is in the DOM
+// either way, so read the ids straight off the cards.
+function getAllThumbnailMediaIds(): Set<string> {
+  const ids = new Set<string>();
+  for (const card of document.querySelectorAll<HTMLElement>(GallerySelectors.Thumbnail)) {
+    const mediaId = card.getAttribute('data-analytics-media-id');
+    if (mediaId) ids.add(mediaId);
+  }
+  return ids;
+}
+
 function findNewBatch(beforeIds: Set<string>): ReadyThumbnail[] | null {
   const fresh = getReadyThumbnails().filter((t) => !beforeIds.has(t.mediaId));
   const byBatch = new Map<string, ReadyThumbnail[]>();
@@ -686,6 +723,21 @@ function countGenerationErrors(): number {
   ).length;
 }
 
+// vibes.ai mounts a thumbnail's <video> lazily, and in video mode a freshly
+// generated card can sit as a pulsing skeleton — no <video> in the DOM at all —
+// indefinitely. That made getReadyThumbnails() never see the batch, so every
+// video scene burned its full 5-minute poll, retried, and died as SceneFailed.
+// (The old assumption, still described in constants.ts, was that the skeleton
+// was a <canvas> that gets swapped for the real media on its own. It isn't:
+// the card is a div with anim_pulse and nothing ever replaces it.)
+//
+// Opening any ONE card of a batch and coming back paints the other 3 as well
+// — observed by hand, repeatedly. That is exactly the set findNewBatch() needs
+// (it requires all 4 of a batch), so a single click per batch is enough.
+// Hovering is not: it only fades in that one card's overlay controls, and
+// never mounts the <video>. So reproduce the gesture that actually works:
+// click the first unpainted new card, then Escape back out.
+
 type MediaPollResult =
   | { status: 'success'; urls: string[] }
   | { status: 'error' }
@@ -694,7 +746,8 @@ type MediaPollResult =
 
 async function waitForMediaBatch(
   beforeIds: Set<string>,
-  errorBaseline: number
+  errorBaseline: number,
+  sceneNumber: number
 ): Promise<MediaPollResult> {
   for (let attempts = 0; attempts < MEDIA_POLL_MAX_ATTEMPTS; attempts++) {
     if (aborted) return { status: 'aborted' };
@@ -716,7 +769,13 @@ async function waitForMediaBatch(
   return { status: 'timeout' };
 }
 
-const MAX_GENERATION_ATTEMPTS = 5;
+// Two, not five. Once timeouts started retrying too, five attempts meant a
+// dead scene could hold the batch for nearly half an hour (each timeout alone
+// costs a full 5-minute polling window). Two covers the one-off flake, which
+// is what retrying is actually good for, and gives up fast when vibes.ai is
+// genuinely down — a scene that failed twice is better rescued by hand than
+// waited on.
+const MAX_GENERATION_ATTEMPTS = 2;
 const GENERATION_RETRY_DELAY_MS = 25000;
 
 // On "Couldn't generate", vibes.ai's own flakiness (not the prompt) is the
@@ -740,31 +799,40 @@ async function generateWithRetries(
       attempt: { current: attempt, max: MAX_GENERATION_ATTEMPTS },
       cooldownMs: MEDIA_POLL_MAX_ATTEMPTS * MEDIA_POLL_INTERVAL_MS,
     });
-    const result = await waitForMediaBatch(beforeIds, errorBaseline);
+    const result = await waitForMediaBatch(beforeIds, errorBaseline, sceneNumber);
 
     if (result.status === 'aborted') return;
 
     if (result.status === 'success') {
       log({ sceneNumber, step: 'Media lista, descargando', kind: LogKinds.Success });
-      await browser.runtime.sendMessage({
-        action: Actions.DownloadMediaDirect,
-        urls: result.urls,
-        sceneNumber,
-      });
+      await browser.runtime
+        .sendMessage({
+          action: Actions.DownloadMediaDirect,
+          urls: result.urls,
+          sceneNumber,
+        })
+        .catch(() => {});
       return;
     }
 
+    // A timeout used to `return` here, spending exactly ONE of the five
+    // attempts. But a failure that never paints a "Couldn't generate" card is
+    // still a failure worth retrying — arguably more so, since it's the shape
+    // vibes.ai server trouble takes: with /api/sync/stream answering 500 the
+    // gallery stays grey, no media ever appears, and no error card is drawn
+    // either. The scene was then abandoned after a single try, which is not
+    // the retry behaviour this function documents or that users expect.
     if (result.status === 'timeout') {
       const timeoutMinutes = (MEDIA_POLL_MAX_ATTEMPTS * MEDIA_POLL_INTERVAL_MS) / 60000;
       log({
         sceneNumber,
         step: `Tiempo agotado esperando media (${timeoutMinutes} min)`,
         kind: LogKinds.Error,
+        attempt: { current: attempt, max: MAX_GENERATION_ATTEMPTS },
       });
-      return;
     }
 
-    // status === 'error'
+    // From here on, timeout and error share the same retry path.
     if (attempt >= MAX_GENERATION_ATTEMPTS) {
       log({
         sceneNumber,
@@ -772,7 +840,9 @@ async function generateWithRetries(
         kind: LogKinds.Error,
         attempt: { current: attempt, max: MAX_GENERATION_ATTEMPTS },
       });
-      await browser.runtime.sendMessage({ action: Actions.SceneFailed, sceneNumber });
+      await browser.runtime
+        .sendMessage({ action: Actions.SceneFailed, sceneNumber })
+        .catch(() => {});
       return;
     }
 
@@ -794,7 +864,9 @@ async function generateWithRetries(
     const clicked = await clickGenerate();
     if (!clicked) {
       log({ sceneNumber, step: 'No se pudo reintentar, saltando escena', kind: LogKinds.Error });
-      await browser.runtime.sendMessage({ action: Actions.SceneFailed, sceneNumber });
+      await browser.runtime
+        .sendMessage({ action: Actions.SceneFailed, sceneNumber })
+        .catch(() => {});
       return;
     }
   }
@@ -826,7 +898,7 @@ async function handleImageMode(
     return;
   }
 
-  const beforeIds = new Set(getReadyThumbnails().map((t) => t.mediaId));
+  const beforeIds = getAllThumbnailMediaIds();
 
   const clickGenerate = async (): Promise<boolean> => {
     // Defensive: a failed generation (or the composer picking up stray text
@@ -887,7 +959,7 @@ async function handleVideoMode(
     return;
   }
 
-  const beforeIds = new Set(getReadyThumbnails().map((t) => t.mediaId));
+  const beforeIds = getAllThumbnailMediaIds();
 
   const clickGenerate = async (): Promise<boolean> => {
     // Defensive: a failed generation can leave the composer empty. The
@@ -926,7 +998,16 @@ async function handleVideoMode(
 
 export default defineContentScript({
   matches: ['*://*.vibes.ai/*', '*://vibes.ai/*'],
-  main() {
+  main(ctx) {
+    // The extension can reload/update mid-poll (e.g. `wxt dev` HMR, or a
+    // background update) while this tab's long-running generateWithRetries
+    // loop is still active. Once that happens every further sendMessage call
+    // would throw "Extension context invalidated" — stop the loop right away
+    // instead of spinning uselessly until it hits one.
+    ctx.onInvalidated(() => {
+      aborted = true;
+    });
+
     browser.runtime.onMessage.addListener(
       (message: ExtensionMessage, _sender, sendResponse: (r: ContentResponse) => void) => {
         if (message.action === Actions.StopBatch) {

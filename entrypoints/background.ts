@@ -86,6 +86,11 @@ function broadcastStatus() {
   browser.runtime.sendMessage({ action: Actions.BatchStatus, status: getStatus() }).catch(() => {});
 }
 
+// Must stay >= the content script's own media polling window
+// (MEDIA_POLL_MAX_ATTEMPTS * MEDIA_POLL_INTERVAL_MS), or this alarm cuts a
+// scene short while the tab is still legitimately polling for it.
+const SCENE_POLL_BUDGET_MINUTES = 5;
+
 async function resetSceneTimeout(delayInMinutes: number) {
   await browser.alarms.clear(Alarms.SceneTimeout);
   browser.alarms.create(Alarms.SceneTimeout, { delayInMinutes });
@@ -243,6 +248,22 @@ async function markSceneErrorAndAdvance(sceneNumber: number) {
 export default defineBackground(() => {
   browser.runtime.onMessage.addListener(async (message: ExtensionMessage) => {
     await batchLoaded;
+
+    // A retry log means the content script is deliberately waiting out a
+    // cooldown and will then poll again — that is work in progress, not the
+    // silent stall the SceneTimeout alarm exists to catch. Without renewing
+    // the alarm here it fires mid-retry and kills a scene still being worked
+    // on, so the documented 5 attempts could never actually happen: a single
+    // timeout already consumed the whole 5-minute budget.
+    //
+    // The new deadline covers the announced cooldown plus a full polling
+    // window plus slack; anything shorter just moves the premature kill to
+    // the next attempt.
+    if (message.action === Actions.Log && message.kind === LogKinds.Retry) {
+      const cooldownMinutes = (message.cooldownMs ?? 0) / 60000;
+      await resetSceneTimeout(cooldownMinutes + SCENE_POLL_BUDGET_MINUTES + 1);
+      return;
+    }
 
     if (message.action === Actions.StartBatch) {
       const preCompleted = message.preCompletedSceneNumbers;
