@@ -8,7 +8,8 @@ import {
   advanceAfterPendingWrite,
   markSceneErrorAndAdvance,
 } from './sceneOrchestration';
-import { nativeClick, nativeType } from './nativeInput';
+import { nativeClick, nativeType, nativeUploadFile } from './nativeInput';
+import { saveTempFileForUpload, cleanupTempDownload } from './downloadFile';
 
 export default defineBackground(() => {
   browser.runtime.onMessage.addListener(async (message: ExtensionMessage, sender) => {
@@ -105,6 +106,19 @@ export default defineBackground(() => {
       if (!tabId) return;
       await nativeType(tabId, text);
       return { ok: true };
+    }
+
+    if (message.action === Actions.NativeUploadFile) {
+      const { imageBase64, uploadName, x, y } = message;
+      const tabId = batchStore.batch?.tabId ?? sender.tab?.id;
+      if (!tabId) return { ok: false };
+
+      const saved = await saveTempFileForUpload(imageBase64, uploadName);
+      if (!saved) return { ok: false };
+
+      const ok = await nativeUploadFile(tabId, x, y, saved.path);
+      await cleanupTempDownload(saved);
+      return { ok };
     }
 
     return;

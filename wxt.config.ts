@@ -4,8 +4,20 @@ export default defineConfig({
   modules: ['@wxt-dev/module-react'],
   manifest: {
     name: 'AI Content Generator',
-    version: '1.0.11',
-    permissions: ['activeTab', 'tabs', 'storage', 'alarms', 'debugger', 'unlimitedStorage'],
+    version: '1.0.12',
+    // 'downloads' es nuevo (2026-09): hace falta para materializar la
+    // imagen del start frame como archivo real en disco (unica forma de
+    // interceptar el selector de archivo de flow.google.com por protocolo
+    // -- ver NativeUploadFileMessage en lib/types.ts).
+    permissions: [
+      'activeTab',
+      'tabs',
+      'storage',
+      'alarms',
+      'debugger',
+      'downloads',
+      'unlimitedStorage',
+    ],
     host_permissions: [
       'https://*.vibes.ai/*',
       'https://*.fbcdn.net/*',

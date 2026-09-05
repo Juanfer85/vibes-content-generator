@@ -1,7 +1,7 @@
-import { LogKinds, LogLevels } from '../../lib/types';
+import { Actions, LogKinds, LogLevels } from '../../lib/types';
 import { log } from './log';
 import { aborted } from './abortState';
-import { sleepAbortable, nativeClick, base64ToFile, waitFor } from './domUtils';
+import { sleepAbortable, waitFor, nativeClick } from './domUtils';
 import {
   UPLOAD_WAIT_TIMEOUT_MS,
   MAX_UPLOAD_ATTEMPTS,
@@ -10,13 +10,32 @@ import {
   CONFIRM_CLOSE_TIMEOUT_MS,
 } from './constants';
 
-// El rediseno de flow.google.com (2026-09) cambio este trigger de un
-// div[aria-haspopup="dialog"] a un <button class="empty-chip"> con el
-// texto "Inicio" (antes decia "Inicial") -- "Fin" comparte la misma clase,
-// asi que hace falta filtrar por texto en vez de tomar el primero por
-// orden de DOM. Una vez adjuntada la imagen este boton se reemplaza por
-// otra cosa (ver isStartFrameAttached), asi que su ausencia sola no prueba
-// nada por si misma.
+// El rediseno de flow.google.com (2026-09) cambio el flujo entero de
+// adjuntar un start frame. Antes, abrir "Inicio" abria un panel que TENIA
+// adentro un boton de subir archivos, con un <input type="file"> oculto y
+// persistente al que se le podia inyectar el archivo directo. Ahora son
+// DOS pasos separados, confirmados en vivo el 2026-09-05:
+//
+//   1. El menu "+" del proyecto ("Menu para anadir contenido multimedia",
+//      arriba de la lista de medios) -> "Subir". Esto sube el archivo a la
+//      biblioteca de medios del PROYECTO ENTERO, no a esta escena. Es acá
+//      donde de verdad se abre el selector nativo del sistema operativo, y
+//      no hay ningun input persistente al que inyectarle el archivo (ver
+//      nativeUploadFile en el background).
+//   2. RECIEN AHI "Inicio" abre "Selecciona una imagen de encuadre", un
+//      panel que solo deja ELEGIR entre imagenes que ya estan en la
+//      biblioteca del proyecto (generadas en Flow, o subidas en el paso
+//      1) -- no tiene ninguna forma de subir un archivo nuevo desde aca.
+//
+// El nombre de archivo subido en el paso 1 sobrevive tal cual como titulo
+// visible (`span.asset-title`) del resultado en el paso 2 -- a diferencia
+// de las imagenes generadas en Flow, que llevan un titulo descriptivo
+// generado por IA. Por eso se sube con un nombre unico (uuid + nombre
+// original) y se busca ese mismo texto despues, en vez de tener que
+// distinguir por contenido visual.
+
+// El botón "Inicio"/"Fin" comparte la misma clase; se filtra por texto.
+// Antes decia "Inicial"; el rediseno lo renombro a "Inicio".
 function findInitialFrameTrigger(): HTMLElement | null {
   return (
     Array.from(document.querySelectorAll<HTMLButtonElement>('button.empty-chip')).find(
@@ -25,36 +44,78 @@ function findInitialFrameTrigger(): HTMLElement | null {
   );
 }
 
-// After attaching, "Inicial" becomes a thumbnail button with this marker
-// instead of a dialog trigger.
+// NO VERIFICADO EN VIVO: no hay evidencia todavia de como se ve "Inicio"
+// una vez que YA tiene una imagen adjunta bajo el rediseno nuevo, asi que
+// esto probablemente siempre da false (el atributo data-card-open era de
+// la version vieja). El efecto practico es que attachStartFrame() puede
+// volver a subir y elegir la imagen aunque ya estuviera adjunta -- mas
+// lento en un reintento, pero no incorrecto.
 function isStartFrameAttached(): boolean {
   return !!document.querySelector('button[data-card-open]');
 }
 
-function waitForOpenPopover(timeoutMs = UPLOAD_WAIT_TIMEOUT_MS): Promise<HTMLElement | null> {
-  return waitFor(
-    () => document.querySelector<HTMLElement>('[role="dialog"][data-state="open"]'),
-    timeoutMs
+function findAddMediaMenuButton(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(
+    'button[aria-label="Menú para añadir contenido multimedia"]'
   );
 }
 
-function findFileInput(): HTMLInputElement | null {
-  return document.querySelector<HTMLInputElement>('input[type="file"][accept="image/*"]');
-}
-
-// Every other button in the popover (tabs, sort, upload) carries an icon —
-// the confirm ("Add to prompt") button doesn't.
-function findConfirmButton(popover: HTMLElement): HTMLButtonElement | null {
+function findUploadMenuItem(): HTMLElement | null {
   return (
-    Array.from(popover.querySelectorAll<HTMLButtonElement>('button')).find(
-      (btn) => !btn.querySelector('i')
+    Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(
+      (el) => el.textContent?.trim() === 'Subir'
     ) ?? null
   );
 }
 
-function findUploadedOption(popover: HTMLElement, uploadName: string): HTMLElement | null {
-  const img = popover.querySelector<HTMLImageElement>(`img[alt="${CSS.escape(uploadName)}"]`);
-  return img?.closest<HTMLElement>('[role="option"]') ?? null;
+function isFramePickerOpen(): boolean {
+  return Array.from(document.querySelectorAll('h2')).some(
+    (h) => h.textContent?.trim() === 'Selecciona una imagen de encuadre'
+  );
+}
+
+function findUploadedOption(uploadName: string): HTMLElement | null {
+  const title = Array.from(document.querySelectorAll<HTMLElement>('.asset-title')).find(
+    (span) => span.textContent?.trim() === uploadName
+  );
+  return title?.closest<HTMLElement>('button[role="option"]') ?? null;
+}
+
+function findAddToPromptButton(): HTMLButtonElement | null {
+  return (
+    Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find(
+      (b) => b.textContent?.trim() === 'Añadir a petición'
+    ) ?? null
+  );
+}
+
+function centerOf(element: HTMLElement): { x: number; y: number } {
+  const rect = element.getBoundingClientRect();
+  return {
+    x: Math.round(rect.left + rect.width / 2),
+    y: Math.round(rect.top + rect.height / 2),
+  };
+}
+
+// El clic que abre el selector de archivos va por un canal propio
+// (NativeUploadFile), en la MISMA sesion de chrome.debugger que intercepta
+// el dialogo -- no puede ser un nativeClick suelto de domUtils.ts, porque
+// la intercepcion tiene que estar activa ANTES de que el clic dispare el
+// dialogo nativo.
+async function uploadViaNativeChannel(
+  uploadButton: HTMLElement,
+  imageBase64: string,
+  uploadName: string
+): Promise<boolean> {
+  const { x, y } = centerOf(uploadButton);
+  const respuesta = await browser.runtime.sendMessage({
+    action: Actions.NativeUploadFile,
+    imageBase64,
+    uploadName,
+    x,
+    y,
+  });
+  return !!respuesta?.ok;
 }
 
 const UploadResults = {
@@ -65,17 +126,15 @@ const UploadResults = {
 
 type UploadResult = (typeof UploadResults)[keyof typeof UploadResults];
 
-// Confirm closes the popover on success; if a click doesn't (rare), just
-// re-click it — the file is already staged and selected.
-async function confirmSelection(popover: HTMLElement): Promise<UploadResult> {
+async function confirmSelection(): Promise<UploadResult> {
   for (let attempt = 1; attempt <= MAX_CONFIRM_ATTEMPTS; attempt++) {
-    const confirmBtn = await waitFor(() => findConfirmButton(popover));
+    const confirmBtn = await waitFor(() => findAddToPromptButton());
     if (aborted) return UploadResults.Aborted;
     if (!confirmBtn) return UploadResults.Failed;
     await nativeClick(confirmBtn);
 
     const closed = await waitFor(
-      () => (document.body.contains(popover) ? null : true),
+      () => (isFramePickerOpen() ? null : true),
       CONFIRM_CLOSE_TIMEOUT_MS
     );
     if (aborted) return UploadResults.Aborted;
@@ -85,40 +144,38 @@ async function confirmSelection(popover: HTMLElement): Promise<UploadResult> {
 }
 
 async function attemptUpload(imageBase64: string, imageName: string): Promise<UploadResult> {
+  // Paso 1: subir el archivo a la biblioteca del proyecto.
+  const addMediaBtn = findAddMediaMenuButton();
+  if (!addMediaBtn) return UploadResults.Failed;
+  await nativeClick(addMediaBtn);
+
+  const uploadItem = await waitFor(() => findUploadMenuItem(), 4000);
+  if (aborted) return UploadResults.Aborted;
+  if (!uploadItem) return UploadResults.Failed;
+
+  const uploadName = `${crypto.randomUUID()}-${imageName}`;
+  const uploaded = await uploadViaNativeChannel(uploadItem, imageBase64, uploadName);
+  if (aborted) return UploadResults.Aborted;
+  if (!uploaded) return UploadResults.Failed;
+
+  // Paso 2: abrir "Inicio" y elegir el archivo recien subido de la lista.
   const trigger = findInitialFrameTrigger();
   if (!trigger) return UploadResults.Failed;
   await nativeClick(trigger);
 
-  const popover = await waitForOpenPopover();
-  if (aborted) return UploadResults.Aborted;
-  if (!popover) return UploadResults.Failed;
-
-  // The hidden global file input is already in the DOM — no need to click
-  // the "Subir archivos multimedia" trigger, which would open the real OS
-  // file picker (a modal our script can't dismiss) since it's a trusted
-  // click. We inject the file directly instead.
-  const fileInput = findFileInput();
-  if (!fileInput) return UploadResults.Failed;
-
-  // A prior run could've left a same-named file — upload under a unique
-  // name to unambiguously find this exact upload.
-  const uploadName = `${crypto.randomUUID()}-${imageName}`;
-  const file = await base64ToFile(imageBase64, uploadName);
-  const dt = new DataTransfer();
-  dt.items.add(file);
-  fileInput.files = dt.files;
-  fileInput.dispatchEvent(new Event('input', { bubbles: true }));
-  fileInput.dispatchEvent(new Event('change', { bubbles: true }));
-
-  const option = await waitFor(
-    () => findUploadedOption(popover, uploadName),
+  const opened = await waitFor(
+    () => (isFramePickerOpen() ? true : null),
     UPLOAD_WAIT_TIMEOUT_MS
   );
+  if (aborted) return UploadResults.Aborted;
+  if (!opened) return UploadResults.Failed;
+
+  const option = await waitFor(() => findUploadedOption(uploadName), UPLOAD_WAIT_TIMEOUT_MS);
   if (aborted) return UploadResults.Aborted;
   if (!option) return UploadResults.Failed;
   await nativeClick(option);
 
-  return confirmSelection(popover);
+  return confirmSelection();
 }
 
 async function uploadWithRetries(
@@ -159,7 +216,7 @@ async function uploadWithRetries(
       attempt: { current: attempt, max: MAX_UPLOAD_ATTEMPTS },
       cooldownMs: UPLOAD_RETRY_DELAY_MS,
     });
-    // A failed attempt can leave the popover stuck open — click away to close it.
+    // Un intento fallido puede dejar algun panel abierto colgado.
     document.body.click();
     await sleepAbortable(UPLOAD_RETRY_DELAY_MS);
   }

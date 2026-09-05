@@ -10,6 +10,7 @@ export const Actions = {
   Log: 'log',
   NativeClick: 'native_click',
   NativeType: 'native_type',
+  NativeUploadFile: 'native_upload_file',
 } as const;
 
 export const BatchModes = {
@@ -179,6 +180,27 @@ export interface NativeTypeMessage {
   text: string;
 }
 
+// El rediseno de flow.google.com (2026-09) quito el <input type="file">
+// persistente que la version vieja inyectaba directo por DataTransfer: el
+// boton "Subir" ahora crea el input al vuelo, ligado a abrir de una el
+// selector nativo del sistema operativo, y lo destruye apenas se resuelve
+// -- no queda ninguna ventana para inyectarle el archivo por DOM.
+// La unica forma de automatizarlo es igual que Playwright: guardar la
+// imagen como archivo real (chrome.downloads, unica ruta que la extension
+// puede obtener) e interceptar el dialogo a nivel de protocolo
+// (chrome.debugger, Page.setInterceptFileChooserDialog + DOM.setFileInputFiles)
+// en vez de tocar el DOM. `x`/`y` son las coordenadas del "Subir" que el
+// content script ya calculo (mismo patron que NativeClick), porque el clic
+// que abre el dialogo tiene que ir en la MISMA sesion de debugger que la
+// intercepcion, no por un NativeClick suelto de antes.
+export interface NativeUploadFileMessage {
+  action: typeof Actions.NativeUploadFile;
+  imageBase64: string;
+  uploadName: string;
+  x: number;
+  y: number;
+}
+
 export type ExtensionMessage =
   | SendPromptMessage
   | StartBatchMessage
@@ -190,4 +212,5 @@ export type ExtensionMessage =
   | BatchStatusMessage
   | LogMessage
   | NativeClickMessage
-  | NativeTypeMessage;
+  | NativeTypeMessage
+  | NativeUploadFileMessage;
