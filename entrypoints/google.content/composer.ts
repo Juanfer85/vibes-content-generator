@@ -37,8 +37,14 @@ export async function fillSlateComposer(composer: HTMLElement, prompt: string): 
 }
 
 function getVisibleArrowButtons(): HTMLButtonElement[] {
+  // El icono paso de <i>arrow_forward</i> (Material Icons clasico) a
+  // <mat-icon class="google-symbols">arrow_forward</mat-icon> (Angular
+  // Material) con el rediseno de flow.google.com (2026-09) -- el texto de
+  // la ligadura no cambio, solo la etiqueta que lo envuelve.
   return Array.from(document.querySelectorAll('button')).filter(
-    (b) => b.querySelector('i')?.textContent === 'arrow_forward' && b.offsetParent !== null
+    (b) =>
+      b.querySelector('i, mat-icon')?.textContent?.trim() === 'arrow_forward' &&
+      b.offsetParent !== null
   ) as HTMLButtonElement[];
 }
 
