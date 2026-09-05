@@ -60,17 +60,27 @@ function findAddMediaMenuButton(): HTMLElement | null {
   );
 }
 
+// Comparacion por substring, no igualdad exacta: un boton/menuitem de
+// Angular Material suele traer un <mat-icon> hermano cuyo texto de ligadura
+// (ej. "upload") se concatena en el textContent junto con la etiqueta
+// visible -- confirmado ya una vez con el boton de enviar ("arrow_forward" +
+// "Enviar" pegados). La igualdad exacta se cae por eso, no porque el texto
+// visible haya cambiado.
+function hasText(el: Element, text: string): boolean {
+  return !!el.textContent?.includes(text);
+}
+
 function findUploadMenuItem(): HTMLElement | null {
   return (
-    Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(
-      (el) => el.textContent?.trim() === 'Subir'
+    Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find((el) =>
+      hasText(el, 'Subir')
     ) ?? null
   );
 }
 
 function isFramePickerOpen(): boolean {
-  return Array.from(document.querySelectorAll('h2')).some(
-    (h) => h.textContent?.trim() === 'Selecciona una imagen de encuadre'
+  return Array.from(document.querySelectorAll('h2')).some((h) =>
+    hasText(h, 'Selecciona una imagen de encuadre')
   );
 }
 
@@ -83,8 +93,8 @@ function findUploadedOption(uploadName: string): HTMLElement | null {
 
 function findAddToPromptButton(): HTMLButtonElement | null {
   return (
-    Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find(
-      (b) => b.textContent?.trim() === 'Añadir a petición'
+    Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+      hasText(b, 'Añadir a petición')
     ) ?? null
   );
 }
