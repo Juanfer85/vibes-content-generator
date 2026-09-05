@@ -143,24 +143,44 @@ async function confirmSelection(): Promise<UploadResult> {
   return UploadResults.Failed;
 }
 
-async function attemptUpload(imageBase64: string, imageName: string): Promise<UploadResult> {
+// Reporta EN QUE PASO puntual se cayo, en vez del generico "Subida fallo":
+// con la orquestacion de chrome.debugger sin probar en vivo todavia, adivinar
+// a ciegas cual de los ~8 pasos encadenados fallo desperdicia rondas enteras.
+function reportStepFailure(sceneNumber: number, step: string): UploadResult {
+  log({ sceneNumber, step, kind: LogKinds.Error, level: LogLevels.Detail });
+  return UploadResults.Failed;
+}
+
+async function attemptUpload(
+  imageBase64: string,
+  imageName: string,
+  sceneNumber: number
+): Promise<UploadResult> {
   // Paso 1: subir el archivo a la biblioteca del proyecto.
   const addMediaBtn = findAddMediaMenuButton();
-  if (!addMediaBtn) return UploadResults.Failed;
+  if (!addMediaBtn) {
+    return reportStepFailure(sceneNumber, 'No se encontró el botón "+" del proyecto');
+  }
   await nativeClick(addMediaBtn);
 
   const uploadItem = await waitFor(() => findUploadMenuItem(), 4000);
   if (aborted) return UploadResults.Aborted;
-  if (!uploadItem) return UploadResults.Failed;
+  if (!uploadItem) {
+    return reportStepFailure(sceneNumber, 'No se encontró "Subir" en el menú "+"');
+  }
 
   const uploadName = `${crypto.randomUUID()}-${imageName}`;
   const uploaded = await uploadViaNativeChannel(uploadItem, imageBase64, uploadName);
   if (aborted) return UploadResults.Aborted;
-  if (!uploaded) return UploadResults.Failed;
+  if (!uploaded) {
+    return reportStepFailure(sceneNumber, 'Falló la subida nativa (chrome.debugger)');
+  }
 
   // Paso 2: abrir "Inicio" y elegir el archivo recien subido de la lista.
   const trigger = findInitialFrameTrigger();
-  if (!trigger) return UploadResults.Failed;
+  if (!trigger) {
+    return reportStepFailure(sceneNumber, 'No se encontró el botón "Inicio"');
+  }
   await nativeClick(trigger);
 
   const opened = await waitFor(
@@ -168,14 +188,22 @@ async function attemptUpload(imageBase64: string, imageName: string): Promise<Up
     UPLOAD_WAIT_TIMEOUT_MS
   );
   if (aborted) return UploadResults.Aborted;
-  if (!opened) return UploadResults.Failed;
+  if (!opened) {
+    return reportStepFailure(sceneNumber, 'No se abrió "Selecciona una imagen de encuadre"');
+  }
 
   const option = await waitFor(() => findUploadedOption(uploadName), UPLOAD_WAIT_TIMEOUT_MS);
   if (aborted) return UploadResults.Aborted;
-  if (!option) return UploadResults.Failed;
+  if (!option) {
+    return reportStepFailure(sceneNumber, 'La imagen subida no apareció en la lista');
+  }
   await nativeClick(option);
 
-  return confirmSelection();
+  const confirmado = await confirmSelection();
+  if (confirmado === UploadResults.Failed) {
+    return reportStepFailure(sceneNumber, 'No se pudo confirmar "Añadir a petición"');
+  }
+  return confirmado;
 }
 
 async function uploadWithRetries(
@@ -196,7 +224,7 @@ async function uploadWithRetries(
       attempt: { current: attempt, max: MAX_UPLOAD_ATTEMPTS },
       cooldownMs: UPLOAD_WAIT_TIMEOUT_MS,
     });
-    result = await attemptUpload(imageBase64, imageName);
+    result = await attemptUpload(imageBase64, imageName, sceneNumber);
 
     switch (result) {
       case UploadResults.Success:
