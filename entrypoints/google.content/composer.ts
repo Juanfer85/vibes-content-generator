@@ -1,7 +1,13 @@
 import { sleep, nativeClick, nativeType } from './domUtils';
 
 export function getComposer(): HTMLElement | null {
-  return document.querySelector<HTMLElement>('[data-slate-editor="true"]');
+  // Google migro el editor de Slate.js a ProseMirror al mudar Flow de
+  // labs.google a flow.google.com (2026-09): ya no existe el atributo
+  // data-slate-editor, el nodo editable real es un <flow-rich-text-editor>
+  // con un div.ProseMirror[contenteditable="true"] adentro.
+  return document.querySelector<HTMLElement>(
+    'flow-rich-text-editor .ProseMirror[contenteditable="true"]'
+  );
 }
 
 // Google Flow uses Slate.js, which blocks synthetic (isTrusted: false) input
