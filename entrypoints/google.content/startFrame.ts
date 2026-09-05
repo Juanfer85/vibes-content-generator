@@ -10,13 +10,19 @@ import {
   CONFIRM_CLOSE_TIMEOUT_MS,
 } from './constants';
 
-// The "Inicial"/"Final" frame triggers are the only elements with this
-// pattern on the page, always in that DOM order — Inicial is the first one.
-// Once a start frame is attached, this trigger is replaced by a thumbnail
-// button, so its absence alone isn't proof of anything — see
-// isStartFrameAttached below for that.
+// El rediseno de flow.google.com (2026-09) cambio este trigger de un
+// div[aria-haspopup="dialog"] a un <button class="empty-chip"> con el
+// texto "Inicio" (antes decia "Inicial") -- "Fin" comparte la misma clase,
+// asi que hace falta filtrar por texto en vez de tomar el primero por
+// orden de DOM. Una vez adjuntada la imagen este boton se reemplaza por
+// otra cosa (ver isStartFrameAttached), asi que su ausencia sola no prueba
+// nada por si misma.
 function findInitialFrameTrigger(): HTMLElement | null {
-  return document.querySelector<HTMLElement>('div[aria-haspopup="dialog"][aria-controls]');
+  return (
+    Array.from(document.querySelectorAll<HTMLButtonElement>('button.empty-chip')).find(
+      (b) => b.textContent?.trim() === 'Inicio'
+    ) ?? null
+  );
 }
 
 // After attaching, "Inicial" becomes a thumbnail button with this marker
