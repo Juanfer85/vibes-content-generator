@@ -3,9 +3,32 @@
 // (element.click(), KeyboardEvent) but do respond to actual input dispatched
 // this way.
 
+// chrome.debugger solo permite UNA sesion adjunta por pestaña desde esta
+// extension a la vez. nativeUploadFile se queda adjuntado hasta 8s esperando
+// Page.fileChooserOpened; si nativeClick/nativeType de OTRO paso cae en ese
+// margen, su propio attach() falla ("Another debugger is already attached")
+// -- probable causa de los fallos intermitentes vistos en vivo el
+// 2026-09-05 (a veces "Subir" no aparece, a veces la imagen subida no
+// aparece en la lista: distinto punto cada vez, tal como se espera de una
+// condicion de carrera). Reintentar el attach un par de veces con una
+// pausa corta le da tiempo a la sesion anterior a soltarse.
+async function attachWithRetry(tabId: number, maxAttempts = 3): Promise<void> {
+  let lastError: unknown;
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      await browser.debugger.attach({ tabId }, '1.3');
+      return;
+    } catch (err) {
+      lastError = err;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+  throw lastError;
+}
+
 export async function nativeClick(tabId: number, x: number, y: number) {
   try {
-    await browser.debugger.attach({ tabId }, '1.3');
+    await attachWithRetry(tabId);
     await browser.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', {
       type: 'mousePressed',
       x,
@@ -21,18 +44,22 @@ export async function nativeClick(tabId: number, x: number, y: number) {
       clickCount: 1,
     });
     await browser.debugger.detach({ tabId });
-  } catch {
-    // Debugger attach can fail if the tab is already attached; silently ignore.
+  } catch (err) {
+    // Debugger attach can fail if the tab is already attached (por ejemplo,
+    // si nativeUploadFile todavia no solto el suyo) -- se sigue ignorando
+    // para no interrumpir el batch, pero ahora queda en consola para poder
+    // diagnosticar fallos intermitentes en vez de adivinar a ciegas.
+    console.error('[nativeClick] falló:', err);
   }
 }
 
 export async function nativeType(tabId: number, text: string) {
   try {
-    await browser.debugger.attach({ tabId }, '1.3');
+    await attachWithRetry(tabId);
     await browser.debugger.sendCommand({ tabId }, 'Input.insertText', { text });
     await browser.debugger.detach({ tabId });
-  } catch {
-    // Silently ignore
+  } catch (err) {
+    console.error('[nativeType] falló:', err);
   }
 }
 
@@ -52,9 +79,16 @@ export async function nativeType(tabId: number, text: string) {
 // `saveTempFileForUpload` en downloadFile.ts para como se consigue esa
 // ruta a partir de la imagen que la extension solo tiene en memoria.
 //
-// NO VERIFICADO EN VIVO todavia (escrito el 2026-09-05 a partir de la
-// evidencia del DOM real y de como Chrome DevTools Protocol expone este
-// mecanismo; falta probarlo contra la extension de verdad).
+// VERIFICADO PARCIALMENTE EN VIVO (2026-09-05): el mecanismo de
+// intercepcion + DOM.setFileInputFiles SI funciona (la imagen aparece
+// subida en Flow), pero el flujo completo falla de forma intermitente en
+// puntos distintos entre reintentos, incluso con el flag
+// --silent-debugger-extension-api puesto. Sospecha principal sin
+// confirmar: esta funcion mantiene el debugger ATTACHED durante todo el
+// tiempo que espera el evento Page.fileChooserOpened (hasta 8s); si algun
+// nativeClick/nativeType de OTRO paso se dispara en ese margen, su propio
+// intento de attach() falla ("Another debugger is already attached") y
+// quedaba silenciosamente ignorado -- de ahi el logging nuevo de arriba.
 export async function nativeUploadFile(
   tabId: number,
   x: number,
@@ -74,6 +108,10 @@ export async function nativeUploadFile(
       const backendNodeId = (params as { backendNodeId?: number } | undefined)
         ?.backendNodeId;
       if (!backendNodeId) {
+        console.error(
+          '[nativeUploadFile] Page.fileChooserOpened sin backendNodeId:',
+          params
+        );
         void finish(false);
         return;
       }
@@ -83,7 +121,10 @@ export async function nativeUploadFile(
           backendNodeId,
         })
         .then(() => finish(true))
-        .catch(() => finish(false));
+        .catch((err) => {
+          console.error('[nativeUploadFile] DOM.setFileInputFiles falló:', err);
+          finish(false);
+        });
     };
 
     const finish = async (result: boolean) => {
@@ -97,20 +138,21 @@ export async function nativeUploadFile(
           'Page.setInterceptFileChooserDialog',
           { enabled: false }
         );
-      } catch {
+      } catch (err) {
         // El tab puede haber navegado o el debugger ya soltarse solo.
+        console.error('[nativeUploadFile] no se pudo desactivar la intercepción:', err);
       }
       try {
         await browser.debugger.detach({ tabId });
-      } catch {
-        // Ignorado: puede que ya estuviera desconectado.
+      } catch (err) {
+        console.error('[nativeUploadFile] detach falló:', err);
       }
       resolve(result);
     };
 
     void (async () => {
       try {
-        await browser.debugger.attach({ tabId }, '1.3');
+        await attachWithRetry(tabId);
         await browser.debugger.sendCommand({ tabId }, 'Page.enable', {});
         await browser.debugger.sendCommand(
           { tabId },
@@ -132,11 +174,15 @@ export async function nativeUploadFile(
           button: 'left',
           clickCount: 1,
         });
-      } catch {
+      } catch (err) {
+        console.error('[nativeUploadFile] falló antes de abrir el diálogo:', err);
         void finish(false);
         return;
       }
-      timeoutId = setTimeout(() => void finish(false), 8000);
+      timeoutId = setTimeout(() => {
+        console.error('[nativeUploadFile] timeout esperando Page.fileChooserOpened');
+        void finish(false);
+      }, 8000);
     })();
   });
 }
