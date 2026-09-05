@@ -4,7 +4,9 @@ import { setAborted } from './abortState';
 import { handleImageMode, handleVideoMode } from './modeHandlers';
 
 export default defineContentScript({
-  matches: ['*://labs.google/*'],
+  // Google movio Flow de labs.google a flow.google.com (2026-09); se
+  // mantienen los dos por si el dominio viejo sigue redirigiendo activo.
+  matches: ['*://labs.google/*', '*://flow.google.com/*'],
   main() {
     browser.runtime.onMessage.addListener((message: ExtensionMessage) => {
       // Only 2 actions matter to this content script — everything else
