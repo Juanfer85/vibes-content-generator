@@ -126,129 +126,118 @@ const UploadResults = {
 
 type UploadResult = (typeof UploadResults)[keyof typeof UploadResults];
 
-async function confirmSelection(): Promise<UploadResult> {
+// El resultado ahora viaja CON el motivo puntual del fallo (ver comentario
+// mas abajo, en Attempt): un log aparte a nivel Detail queda pisado de
+// inmediato por el "Subida fallo, reintentando" que loguea uploadWithRetries
+// en ESE MISMO nivel -- batchStore.pushLog solo guarda el ultimo mensaje por
+// nivel, no un historial. Por eso el motivo va DENTRO del unico mensaje de
+// ese nivel, no en uno propio.
+interface Attempt {
+  result: UploadResult;
+  reason?: string;
+}
+
+const ok = (result: UploadResult): Attempt => ({ result });
+const failed = (reason: string): Attempt => ({ result: UploadResults.Failed, reason });
+
+async function confirmSelection(): Promise<Attempt> {
   for (let attempt = 1; attempt <= MAX_CONFIRM_ATTEMPTS; attempt++) {
     const confirmBtn = await waitFor(() => findAddToPromptButton());
-    if (aborted) return UploadResults.Aborted;
-    if (!confirmBtn) return UploadResults.Failed;
+    if (aborted) return ok(UploadResults.Aborted);
+    if (!confirmBtn) return failed('No se encontró el botón "Añadir a petición"');
     await nativeClick(confirmBtn);
 
     const closed = await waitFor(
       () => (isFramePickerOpen() ? null : true),
       CONFIRM_CLOSE_TIMEOUT_MS
     );
-    if (aborted) return UploadResults.Aborted;
-    if (closed) return UploadResults.Success;
+    if (aborted) return ok(UploadResults.Aborted);
+    if (closed) return ok(UploadResults.Success);
   }
-  return UploadResults.Failed;
-}
-
-// Reporta EN QUE PASO puntual se cayo, en vez del generico "Subida fallo":
-// con la orquestacion de chrome.debugger sin probar en vivo todavia, adivinar
-// a ciegas cual de los ~8 pasos encadenados fallo desperdicia rondas enteras.
-function reportStepFailure(sceneNumber: number, step: string): UploadResult {
-  log({ sceneNumber, step, kind: LogKinds.Error, level: LogLevels.Detail });
-  return UploadResults.Failed;
+  return failed('El panel no se cerró tras confirmar');
 }
 
 async function attemptUpload(
   imageBase64: string,
-  imageName: string,
-  sceneNumber: number
-): Promise<UploadResult> {
+  imageName: string
+): Promise<Attempt> {
   // Paso 1: subir el archivo a la biblioteca del proyecto.
   const addMediaBtn = findAddMediaMenuButton();
-  if (!addMediaBtn) {
-    return reportStepFailure(sceneNumber, 'No se encontró el botón "+" del proyecto');
-  }
+  if (!addMediaBtn) return failed('No se encontró el botón "+" del proyecto');
   await nativeClick(addMediaBtn);
 
   const uploadItem = await waitFor(() => findUploadMenuItem(), 4000);
-  if (aborted) return UploadResults.Aborted;
-  if (!uploadItem) {
-    return reportStepFailure(sceneNumber, 'No se encontró "Subir" en el menú "+"');
-  }
+  if (aborted) return ok(UploadResults.Aborted);
+  if (!uploadItem) return failed('No se encontró "Subir" en el menú "+"');
 
   const uploadName = `${crypto.randomUUID()}-${imageName}`;
   const uploaded = await uploadViaNativeChannel(uploadItem, imageBase64, uploadName);
-  if (aborted) return UploadResults.Aborted;
-  if (!uploaded) {
-    return reportStepFailure(sceneNumber, 'Falló la subida nativa (chrome.debugger)');
-  }
+  if (aborted) return ok(UploadResults.Aborted);
+  if (!uploaded) return failed('Falló la subida nativa (chrome.debugger)');
 
   // Paso 2: abrir "Inicio" y elegir el archivo recien subido de la lista.
   const trigger = findInitialFrameTrigger();
-  if (!trigger) {
-    return reportStepFailure(sceneNumber, 'No se encontró el botón "Inicio"');
-  }
+  if (!trigger) return failed('No se encontró el botón "Inicio"');
   await nativeClick(trigger);
 
   const opened = await waitFor(
     () => (isFramePickerOpen() ? true : null),
     UPLOAD_WAIT_TIMEOUT_MS
   );
-  if (aborted) return UploadResults.Aborted;
-  if (!opened) {
-    return reportStepFailure(sceneNumber, 'No se abrió "Selecciona una imagen de encuadre"');
-  }
+  if (aborted) return ok(UploadResults.Aborted);
+  if (!opened) return failed('No se abrió "Selecciona una imagen de encuadre"');
 
   const option = await waitFor(() => findUploadedOption(uploadName), UPLOAD_WAIT_TIMEOUT_MS);
-  if (aborted) return UploadResults.Aborted;
-  if (!option) {
-    return reportStepFailure(sceneNumber, 'La imagen subida no apareció en la lista');
-  }
+  if (aborted) return ok(UploadResults.Aborted);
+  if (!option) return failed('La imagen subida no apareció en la lista');
   await nativeClick(option);
 
-  const confirmado = await confirmSelection();
-  if (confirmado === UploadResults.Failed) {
-    return reportStepFailure(sceneNumber, 'No se pudo confirmar "Añadir a petición"');
-  }
-  return confirmado;
+  return confirmSelection();
 }
 
 async function uploadWithRetries(
   imageBase64: string,
   imageName: string,
   sceneNumber: number
-): Promise<UploadResult> {
-  let result: UploadResult = UploadResults.Failed;
+): Promise<Attempt> {
+  let attempt: Attempt = { result: UploadResults.Failed };
 
-  for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
-    if (aborted) return UploadResults.Aborted;
+  for (let intento = 1; intento <= MAX_UPLOAD_ATTEMPTS; intento++) {
+    if (aborted) return ok(UploadResults.Aborted);
 
     log({
       sceneNumber,
       step: 'Subiendo start frame',
       kind: LogKinds.Info,
       level: LogLevels.Detail,
-      attempt: { current: attempt, max: MAX_UPLOAD_ATTEMPTS },
+      attempt: { current: intento, max: MAX_UPLOAD_ATTEMPTS },
       cooldownMs: UPLOAD_WAIT_TIMEOUT_MS,
     });
-    result = await attemptUpload(imageBase64, imageName, sceneNumber);
+    attempt = await attemptUpload(imageBase64, imageName);
 
-    switch (result) {
+    switch (attempt.result) {
       case UploadResults.Success:
       case UploadResults.Aborted:
-        return result;
+        return attempt;
 
       case UploadResults.Failed:
-        if (attempt >= MAX_UPLOAD_ATTEMPTS) return result;
+        if (intento >= MAX_UPLOAD_ATTEMPTS) return attempt;
         break;
     }
 
     log({
       sceneNumber,
-      step: 'Subida falló, reintentando',
+      step: attempt.reason ? `Subida falló: ${attempt.reason}` : 'Subida falló, reintentando',
       kind: LogKinds.Retry,
       level: LogLevels.Detail,
-      attempt: { current: attempt, max: MAX_UPLOAD_ATTEMPTS },
+      attempt: { current: intento, max: MAX_UPLOAD_ATTEMPTS },
       cooldownMs: UPLOAD_RETRY_DELAY_MS,
     });
     // Un intento fallido puede dejar algun panel abierto colgado.
     document.body.click();
     await sleepAbortable(UPLOAD_RETRY_DELAY_MS);
   }
-  return result;
+  return attempt;
 }
 
 // Idempotent — safe to call before every generation attempt, not just the
@@ -264,11 +253,13 @@ export async function attachStartFrame(
 
   log({ sceneNumber, step: 'Adjuntando start frame', kind: LogKinds.Info, level: LogLevels.Step });
 
-  const result = await uploadWithRetries(imageBase64, imageName, sceneNumber);
-  if (result !== UploadResults.Success) {
+  const attempt = await uploadWithRetries(imageBase64, imageName, sceneNumber);
+  if (attempt.result !== UploadResults.Success) {
     log({
       sceneNumber,
-      step: 'No se pudo adjuntar el start frame',
+      step: attempt.reason
+        ? `No se pudo adjuntar el start frame: ${attempt.reason}`
+        : 'No se pudo adjuntar el start frame',
       kind: LogKinds.Error,
       level: LogLevels.Step,
     });

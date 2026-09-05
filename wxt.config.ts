@@ -4,7 +4,7 @@ export default defineConfig({
   modules: ['@wxt-dev/module-react'],
   manifest: {
     name: 'AI Content Generator',
-    version: '1.0.13',
+    version: '1.0.14',
     // 'downloads' es nuevo (2026-09): hace falta para materializar la
     // imagen del start frame como archivo real en disco (unica forma de
     // interceptar el selector de archivo de flow.google.com por protocolo
