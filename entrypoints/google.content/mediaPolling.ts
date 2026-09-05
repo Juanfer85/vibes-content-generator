@@ -25,14 +25,19 @@ export async function reportSceneFailed(sceneNumber: number, reason: string, ret
 
 // ── Tile reading ───────────────────────────────────────────────────────────────
 
-// Every result (image or video) is wrapped in an element with
-// data-tile-id="fe_id_<uuid>" — Google Flow renders this wrapper twice
-// (outer + inner container, same id), so querySelector (first match) is
-// enough; no need to dedupe manually.
+// El rediseno de flow.google.com (2026-09) quito el data-tile-id del
+// contenedor envolvente (<flow-tile-container> / <flow-image-tile>, sin
+// atributo identificador propio) y en su lugar el <img>/<video> final trae
+// data-media-id="<uuid>" directo -- pero SOLO una vez que la media termino
+// de generarse: mientras esta pendiente, la tarjeta muestra un <canvas> de
+// esqueleto sin ningun atributo identificador. Por eso ya no hace falta
+// (ni se puede) rastrear un estado "pending" por id propio: la sola
+// aparicion de un data-media-id nuevo ES la senal de que esa generacion
+// esta lista.
 function getAllTileIds(): Set<string> {
   const ids = new Set<string>();
-  document.querySelectorAll<HTMLElement>('[data-tile-id]').forEach((wrapper) => {
-    const id = wrapper.getAttribute('data-tile-id');
+  document.querySelectorAll<HTMLElement>('[data-media-id]').forEach((media) => {
+    const id = media.getAttribute('data-media-id');
     if (id) ids.add(id);
   });
   return ids;
@@ -53,23 +58,18 @@ type TileState =
   | { status: typeof TileStatuses.Failed }
   | { status: typeof TileStatuses.Pending };
 
-// A failed generation renders a "warning" icon (Material Symbols ligature,
-// language-independent) with a non-empty reason in .sc-101009f9-2. The same
-// warning card also shows up empty for an unrelated "removed/reuse" state
-// (action icon "undo" instead of "refresh") — only the one with actual
-// reason text is a real failure. Everything else that isn't a real, loaded
-// media element is still mid-generation.
+// No hay (todavia) forma confirmada de detectar una tarjeta fallida bajo el
+// rediseno -- la deteccion vieja (icono "warning" + .sc-101009f9-2, clases
+// de styled-components) no aplica a la marca nueva de Angular Material y no
+// hay evidencia de como se ve una tarjeta fallida ahora. Se deja sin
+// detectar a proposito: una generacion que en verdad falla simplemente
+// nunca aparece con data-media-id y cae en el mismo timeout que cualquier
+// pendiente que tarda de mas (mas lento, pero no incorrecto). Si se
+// encuentra el marcado real de fallo, se puede reincorporar aqui.
 function getTileState(id: string): TileState {
-  const wrapper = document.querySelector<HTMLElement>(`[data-tile-id="${CSS.escape(id)}"]`);
-  if (!wrapper) return { status: TileStatuses.Pending };
-
-  const hasWarningIcon = Array.from(wrapper.querySelectorAll('i')).some(
-    (i) => i.textContent?.trim() === 'warning'
+  const media = document.querySelector<HTMLImageElement | HTMLVideoElement>(
+    `[data-media-id="${CSS.escape(id)}"]`
   );
-  const errorReason = wrapper.querySelector('.sc-101009f9-2')?.textContent?.trim();
-  if (hasWarningIcon && errorReason) return { status: TileStatuses.Failed };
-
-  const media = wrapper.querySelector<HTMLImageElement | HTMLVideoElement>('img, video');
   if (!media) return { status: TileStatuses.Pending };
 
   if (media.tagName === 'VIDEO') {
