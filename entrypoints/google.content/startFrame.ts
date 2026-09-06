@@ -1,13 +1,11 @@
 import { Actions, LogKinds, LogLevels } from '../../lib/types';
 import { log } from './log';
 import { aborted } from './abortState';
-import { sleepAbortable, waitFor, nativeClick } from './domUtils';
+import { sleepAbortable, waitFor, nativeClick, nativeHover } from './domUtils';
 import {
   UPLOAD_WAIT_TIMEOUT_MS,
   MAX_UPLOAD_ATTEMPTS,
   UPLOAD_RETRY_DELAY_MS,
-  MAX_CONFIRM_ATTEMPTS,
-  CONFIRM_CLOSE_TIMEOUT_MS,
 } from './constants';
 
 // El rediseno de flow.google.com (2026-09) cambio el flujo entero de
@@ -96,30 +94,56 @@ function findUploadMenuItem(): HTMLElement | null {
   );
 }
 
-function isFramePickerOpen(): boolean {
-  return Array.from(document.querySelectorAll('h2')).some((h) =>
-    hasText(h, 'Selecciona una imagen de encuadre')
-  );
+// Ids de las imagenes que hay ahora mismo en la galeria del proyecto. Se
+// usa para descubrir CUAL tile es el de la imagen recien subida: la nueva
+// es, por definicion, el id que antes no estaba. Mucho mas confiable que
+// buscarla por nombre (los titulos se truncan en pantalla).
+function getImageMediaIds(): Set<string> {
+  const ids = new Set<string>();
+  document
+    .querySelectorAll<HTMLElement>('flow-image-tile img[data-media-id]')
+    .forEach((img) => {
+      const id = img.getAttribute('data-media-id');
+      if (id) ids.add(id);
+    });
+  return ids;
 }
 
-function findUploadedOption(uploadName: string): HTMLElement | null {
-  const title = Array.from(document.querySelectorAll<HTMLElement>('.asset-title')).find(
-    (span) => span.textContent?.trim() === uploadName
-  );
-  return title?.closest<HTMLElement>('button[role="option"]') ?? null;
+function findTileByMediaId(id: string): HTMLElement | null {
+  const img = document.querySelector<HTMLElement>(`img[data-media-id="${CSS.escape(id)}"]`);
+  return img?.closest<HTMLElement>('flow-tile-container') ?? null;
 }
 
-// Solo cuenta si esta HABILITADO. Confirmado en vivo el 2026-09-06: la
-// imagen recien subida aparece en la lista enseguida, pero sigue
-// procesandose un rato (miniatura con spinner) y mientras tanto "Añadir a
-// petición" esta deshabilitado. Devolverlo igual hacia que confirmSelection
-// le clickeara sin efecto y el panel nunca se cerrara.
-function findAddToPromptButton(): HTMLButtonElement | null {
-  return (
-    Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find(
-      (b) => hasText(b, 'Añadir a petición') && !b.disabled
-    ) ?? null
+// Camino corto, confirmado en vivo el 2026-09-06: cada imagen de la
+// galeria tiene un menu ⋮ con la opcion "Animar", que la pone sola como
+// fotograma inicial. Reemplaza todo el rodeo anterior (abrir el panel
+// "Selecciona una imagen de encuadre", buscarla en la lista, seleccionarla
+// y confirmar), que era donde la imagen se perdia una y otra vez.
+async function animarDesdeLaGaleria(tile: HTMLElement): Promise<boolean> {
+  // Los botones del tile (⋮ incluido) solo aparecen con el mouse encima.
+  await nativeHover(tile);
+
+  const menuBtn = await waitFor(
+    () =>
+      Array.from(tile.querySelectorAll<HTMLButtonElement>('button')).find(
+        (b) => b.querySelector('mat-icon')?.textContent?.trim() === 'more_vert'
+      ) ?? null,
+    4000
   );
+  if (!menuBtn) return false;
+  await nativeClick(menuBtn);
+
+  const animar = await waitFor(
+    () =>
+      Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find((i) =>
+        hasText(i, 'Animar')
+      ) ?? null,
+    4000
+  );
+  if (!animar) return false;
+  await nativeClick(animar);
+
+  return !!(await waitFor(() => (isStartFrameAttached() ? true : null), 8000));
 }
 
 function centerOf(element: HTMLElement): { x: number; y: number } {
@@ -181,30 +205,13 @@ interface Attempt {
 const ok = (result: UploadResult): Attempt => ({ result });
 const failed = (reason: string): Attempt => ({ result: UploadResults.Failed, reason });
 
-async function confirmSelection(): Promise<Attempt> {
-  for (let attempt = 1; attempt <= MAX_CONFIRM_ATTEMPTS; attempt++) {
-    // Margen amplio: el boton recien se habilita cuando Flow termina de
-    // procesar la imagen subida (ver findAddToPromptButton).
-    const confirmBtn = await waitFor(() => findAddToPromptButton(), UPLOAD_WAIT_TIMEOUT_MS);
-    if (aborted) return ok(UploadResults.Aborted);
-    if (!confirmBtn) return failed('No se encontró el botón "Añadir a petición"');
-    await nativeClick(confirmBtn);
-
-    const closed = await waitFor(
-      () => (isFramePickerOpen() ? null : true),
-      CONFIRM_CLOSE_TIMEOUT_MS
-    );
-    if (aborted) return ok(UploadResults.Aborted);
-    if (closed) return ok(UploadResults.Success);
-  }
-  return failed('El panel no se cerró tras confirmar');
-}
-
 async function attemptUpload(
   imageBase64: string,
   imageName: string
 ): Promise<Attempt> {
   // Paso 1: subir el archivo a la biblioteca del proyecto.
+  const idsAntes = getImageMediaIds();
+
   const addMediaBtn = findAddMediaMenuButton();
   if (!addMediaBtn) return failed('No se encontró el botón "+" del proyecto');
   await nativeClick(addMediaBtn);
@@ -214,39 +221,32 @@ async function attemptUpload(
   if (!uploadItem) return failed('No se encontró "Subir" en el menú "+"');
 
   const uploadName = `${crypto.randomUUID()}-${imageName}`;
-  const realFileName = await uploadViaNativeChannel(uploadItem, imageBase64, uploadName);
+  const subido = await uploadViaNativeChannel(uploadItem, imageBase64, uploadName);
   if (aborted) return ok(UploadResults.Aborted);
-  if (!realFileName) return failed('Falló la subida nativa (chrome.debugger)');
+  if (!subido) return failed('Falló la subida nativa (chrome.debugger)');
 
-  // DOM.setFileInputFiles solo confirma que Chrome puso el archivo en el
-  // input -- no que Flow ya lo haya leido, empezado a subir a su backend y
-  // agregado a la biblioteca del proyecto. Confirmado en vivo el
-  // 2026-09-05: sin esta pausa, el archivo NUNCA llega a aparecer ni
-  // siquiera en la pestaña "Subidas" de Flow (no es que la busqueda
-  // posterior falle: la subida en si no llega a completarse), muy
-  // probablemente porque abrir "Inicio" justo despues interrumpe el
-  // procesamiento que Flow dispara al detectar el cambio en el input.
-  await sleepAbortable(2000);
+  // Paso 2: esperar a que la imagen aparezca en la galeria. DOM.setFileInputFiles
+  // solo confirma que Chrome puso el archivo en el input -- no que Flow ya lo
+  // haya leido y subido a su backend. Se espera al tile nuevo en vez de a un
+  // tiempo fijo: el id que antes no estaba es, por definicion, el de esta
+  // imagen (mas confiable que buscarla por nombre, que se trunca en pantalla).
+  const idNuevo = await waitFor(() => {
+    const nuevos = [...getImageMediaIds()].filter((id) => !idsAntes.has(id));
+    return nuevos[0] ?? null;
+  }, UPLOAD_WAIT_TIMEOUT_MS);
   if (aborted) return ok(UploadResults.Aborted);
+  if (!idNuevo) return failed('La imagen subida no apareció en la galería');
 
-  // Paso 2: abrir "Inicio" y elegir el archivo recien subido de la lista.
-  const trigger = findInitialFrameTrigger();
-  if (!trigger) return failed('No se encontró el botón "Inicio"');
-  await nativeClick(trigger);
+  const tile = findTileByMediaId(idNuevo);
+  if (!tile) return failed('No se encontró el recuadro de la imagen subida');
 
-  const opened = await waitFor(
-    () => (isFramePickerOpen() ? true : null),
-    UPLOAD_WAIT_TIMEOUT_MS
-  );
+  // Paso 3: "Animar" desde el menu ⋮ del propio tile. Pone la imagen sola
+  // como fotograma inicial, sin pasar por el panel de seleccion.
+  const animado = await animarDesdeLaGaleria(tile);
   if (aborted) return ok(UploadResults.Aborted);
-  if (!opened) return failed('No se abrió "Selecciona una imagen de encuadre"');
+  if (!animado) return failed('No se pudo usar "Animar" sobre la imagen subida');
 
-  const option = await waitFor(() => findUploadedOption(realFileName), UPLOAD_WAIT_TIMEOUT_MS);
-  if (aborted) return ok(UploadResults.Aborted);
-  if (!option) return failed('La imagen subida no apareció en la lista');
-  await nativeClick(option);
-
-  return confirmSelection();
+  return ok(UploadResults.Success);
 }
 
 async function uploadWithRetries(
