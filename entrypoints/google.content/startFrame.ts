@@ -193,6 +193,17 @@ async function attemptUpload(
   if (aborted) return ok(UploadResults.Aborted);
   if (!realFileName) return failed('Falló la subida nativa (chrome.debugger)');
 
+  // DOM.setFileInputFiles solo confirma que Chrome puso el archivo en el
+  // input -- no que Flow ya lo haya leido, empezado a subir a su backend y
+  // agregado a la biblioteca del proyecto. Confirmado en vivo el
+  // 2026-09-05: sin esta pausa, el archivo NUNCA llega a aparecer ni
+  // siquiera en la pestaña "Subidas" de Flow (no es que la busqueda
+  // posterior falle: la subida en si no llega a completarse), muy
+  // probablemente porque abrir "Inicio" justo despues interrumpe el
+  // procesamiento que Flow dispara al detectar el cambio en el input.
+  await sleepAbortable(2000);
+  if (aborted) return ok(UploadResults.Aborted);
+
   // Paso 2: abrir "Inicio" y elegir el archivo recien subido de la lista.
   const trigger = findInitialFrameTrigger();
   if (!trigger) return failed('No se encontró el botón "Inicio"');
