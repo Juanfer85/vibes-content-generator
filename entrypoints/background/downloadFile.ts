@@ -4,11 +4,42 @@
 // que es lo que pide DOM.setFileInputFiles (ver nativeUploadFile en
 // nativeInput.ts). El archivo se borra despues de usarlo.
 //
-// NO VERIFICADO EN VIVO todavia (2026-09-05): escrito a partir de la
-// documentacion de chrome.downloads, sin probar contra la extension real.
+// VERIFICADO EN VIVO el 2026-09-05: chrome.downloads.download() IGNORA el
+// nombre de archivo pedido cuando la fuente es un data: URL -- termina
+// guardando algo generico tipo "descarga.jpg" en la carpeta raiz de
+// Descargas, sin importar el `filename` que se le pida. El archivo SI se
+// sube bien a Flow con ese nombre generico, pero como no coincide con el
+// nombre unico que el codigo espera despues, nunca lo encuentra en la
+// lista. Con un blob: URL (creado en offscreen.ts, porque
+// URL.createObjectURL necesita DOM) el nombre SI se respeta.
+import { Actions } from '../../lib/types';
 
 const DOWNLOAD_WAIT_TIMEOUT_MS = 8000;
 const TEMP_SUBFOLDER = 'vibes-flow-tmp';
+const OFFSCREEN_URL = 'offscreen.html';
+
+async function ensureOffscreenDocument(): Promise<void> {
+  if (await browser.offscreen.hasDocument()) return;
+  await browser.offscreen.createDocument({
+    url: OFFSCREEN_URL,
+    reasons: ['BLOBS'],
+    justification:
+      'Convertir la imagen del start frame a blob: URL para que chrome.downloads.download() respete el nombre de archivo pedido.',
+  });
+}
+
+async function dataUrlToBlobUrl(dataUrl: string): Promise<string | null> {
+  await ensureOffscreenDocument();
+  const respuesta = await browser.runtime.sendMessage({
+    action: Actions.ConvertDataUrlToBlobUrl,
+    dataUrl,
+  });
+  if (!respuesta?.ok) {
+    console.error('[dataUrlToBlobUrl] el offscreen document no pudo convertir:', respuesta);
+    return null;
+  }
+  return respuesta.blobUrl as string;
+}
 
 export interface TempDownload {
   id: number;
@@ -21,10 +52,13 @@ export async function saveTempFileForUpload(
 ): Promise<TempDownload | null> {
   const filename = `${TEMP_SUBFOLDER}/${uploadName}`;
 
+  const blobUrl = await dataUrlToBlobUrl(dataUrl);
+  if (!blobUrl) return null;
+
   let downloadId: number;
   try {
     downloadId = await browser.downloads.download({
-      url: dataUrl,
+      url: blobUrl,
       filename,
       conflictAction: 'uniquify',
       saveAs: false,

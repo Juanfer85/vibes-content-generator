@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Offscreen — AI Content Generator</title>
+  </head>
+  <body>
+    <!--
+      Documento invisible (nunca se muestra al usuario) que existe solo
+      porque chrome.downloads.download() ignora el nombre de archivo pedido
+      cuando la fuente es un data: URL -- termina guardando algo generico
+      tipo "descarga.jpg" (confirmado en vivo el 2026-09-05). Con un
+      blob: URL si lo respeta, pero URL.createObjectURL() necesita un
+      contexto con DOM, que el service worker del background no tiene en
+      Manifest V3. Ver offscreen.ts y downloadFile.ts.
+    -->
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

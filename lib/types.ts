@@ -11,6 +11,7 @@ export const Actions = {
   NativeClick: 'native_click',
   NativeType: 'native_type',
   NativeUploadFile: 'native_upload_file',
+  ConvertDataUrlToBlobUrl: 'convert_data_url_to_blob_url',
 } as const;
 
 export const BatchModes = {
@@ -201,6 +202,17 @@ export interface NativeUploadFileMessage {
   y: number;
 }
 
+// Mandado por el background al documento offscreen (ver entrypoints/offscreen.ts)
+// para convertir un data: URL en un blob: URL -- chrome.downloads.download()
+// SI respeta el nombre de archivo pedido para un blob: URL, a diferencia de
+// un data: URL (confirmado en vivo, ver comentario en downloadFile.ts).
+// URL.createObjectURL() necesita un contexto con DOM, que el service worker
+// del background no tiene en Manifest V3.
+export interface ConvertDataUrlToBlobUrlMessage {
+  action: typeof Actions.ConvertDataUrlToBlobUrl;
+  dataUrl: string;
+}
+
 export type ExtensionMessage =
   | SendPromptMessage
   | StartBatchMessage
@@ -213,4 +225,5 @@ export type ExtensionMessage =
   | LogMessage
   | NativeClickMessage
   | NativeTypeMessage
-  | NativeUploadFileMessage;
+  | NativeUploadFileMessage
+  | ConvertDataUrlToBlobUrlMessage;
