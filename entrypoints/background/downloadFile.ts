@@ -29,7 +29,8 @@ export async function saveTempFileForUpload(
       conflictAction: 'uniquify',
       saveAs: false,
     });
-  } catch {
+  } catch (err) {
+    console.error('[saveTempFileForUpload] downloads.download() falló:', err, { filename });
     return null;
   }
 
@@ -46,9 +47,16 @@ export async function saveTempFileForUpload(
       if (delta.id !== downloadId) return;
       if (delta.state?.current === 'complete') {
         browser.downloads.search({ id: downloadId }).then((items) => {
+          console.log('[saveTempFileForUpload] descarga completa:', {
+            filenamePedido: filename,
+            rutaReal: items[0]?.filename,
+            mime: items[0]?.mime,
+            bytesReceived: items[0]?.bytesReceived,
+          });
           finish(items[0]?.filename ?? null);
         });
       } else if (delta.state?.current === 'interrupted') {
+        console.error('[saveTempFileForUpload] descarga interrumpida:', delta);
         finish(null);
       }
     };
@@ -57,10 +65,19 @@ export async function saveTempFileForUpload(
     // Por si ya termino antes de que el listener quedara puesto (archivos
     // chicos, puede pasar en el mismo tick).
     browser.downloads.search({ id: downloadId }).then((items) => {
-      if (items[0]?.state === 'complete') finish(items[0].filename ?? null);
+      if (items[0]?.state === 'complete') {
+        console.log('[saveTempFileForUpload] descarga ya estaba completa:', {
+          filenamePedido: filename,
+          rutaReal: items[0].filename,
+        });
+        finish(items[0].filename ?? null);
+      }
     });
 
-    setTimeout(() => finish(null), DOWNLOAD_WAIT_TIMEOUT_MS);
+    setTimeout(() => {
+      console.error('[saveTempFileForUpload] timeout esperando que termine la descarga');
+      finish(null);
+    }, DOWNLOAD_WAIT_TIMEOUT_MS);
   });
 }
 

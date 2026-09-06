@@ -111,12 +111,18 @@ export default defineBackground(() => {
     if (message.action === Actions.NativeUploadFile) {
       const { imageBase64, uploadName, x, y } = message;
       const tabId = batchStore.batch?.tabId ?? sender.tab?.id;
+      console.log('[NativeUploadFile] pedido:', { uploadName, x, y, tabId });
       if (!tabId) return { ok: false };
 
       const saved = await saveTempFileForUpload(imageBase64, uploadName);
-      if (!saved) return { ok: false };
+      if (!saved) {
+        console.error('[NativeUploadFile] no se pudo materializar el archivo temporal');
+        return { ok: false };
+      }
+      console.log('[NativeUploadFile] archivo temporal listo:', saved);
 
       const ok = await nativeUploadFile(tabId, x, y, saved.path);
+      console.log('[NativeUploadFile] resultado de la intercepción:', ok);
       await cleanupTempDownload(saved);
       return { ok };
     }
