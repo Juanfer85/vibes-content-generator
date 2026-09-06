@@ -53,6 +53,24 @@ export async function nativeClick(tabId: number, x: number, y: number) {
   }
 }
 
+// Hover real. Hace falta porque flow.google.com carga el <video> de cada
+// resultado SOLO cuando el mouse pasa por encima (verificado en vivo el
+// 2026-09-06: sin hover no hay ni un solo <video> en el DOM, con hover
+// aparece con su src real). Un mouseenter sintetico no alcanza.
+export async function nativeHover(tabId: number, x: number, y: number) {
+  try {
+    await attachWithRetry(tabId);
+    await browser.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x,
+      y,
+    });
+    await browser.debugger.detach({ tabId });
+  } catch (err) {
+    console.error('[nativeHover] falló:', err);
+  }
+}
+
 export async function nativeType(tabId: number, text: string) {
   try {
     await attachWithRetry(tabId);

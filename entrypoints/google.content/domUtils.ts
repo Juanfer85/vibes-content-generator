@@ -37,6 +37,17 @@ export async function nativeClick(element: HTMLElement): Promise<void> {
   await sleep(300);
 }
 
+// Hover real sobre un elemento. flow.google.com carga el <video> de cada
+// resultado SOLO cuando el mouse pasa por encima, y un mouseenter sintetico
+// no alcanza (ver nativeHover en background/nativeInput.ts).
+export async function nativeHover(element: HTMLElement): Promise<void> {
+  const rect = element.getBoundingClientRect();
+  const x = Math.round(rect.left + rect.width / 2);
+  const y = Math.round(rect.top + rect.height / 2);
+  await browser.runtime.sendMessage({ action: Actions.NativeHover, x, y });
+  await sleep(300);
+}
+
 export async function nativeType(text: string): Promise<void> {
   await browser.runtime.sendMessage({ action: Actions.NativeType, text });
   await sleep(100);

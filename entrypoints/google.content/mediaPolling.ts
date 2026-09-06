@@ -8,7 +8,7 @@ import {
   MEDIA_POLL_INTERVAL_MS,
 } from './constants';
 import { aborted } from './abortState';
-import { sleep } from './domUtils';
+import { sleep, waitFor, nativeHover } from './domUtils';
 
 // SendPrompt's sendResponse already fired (instantly, before any of this
 // ran) — every outcome from here on, success or failure, travels as its own
@@ -34,13 +34,47 @@ export async function reportSceneFailed(sceneNumber: number, reason: string, ret
 // (ni se puede) rastrear un estado "pending" por id propio: la sola
 // aparicion de un data-media-id nuevo ES la senal de que esa generacion
 // esta lista.
+// Los VIDEOS no llevan data-media-id (verificado en vivo el 2026-09-06:
+// los tiles de video son <flow-video-tile> y su unica marca propia es la
+// URL de la miniatura, que si es unica por video). Ademas su <video> real
+// ni siquiera existe en el DOM hasta que el mouse pasa por encima. Por eso
+// se los rastrea aparte, por esa URL, y su src real se resuelve despues
+// con un hover (ver resolverUrlDeVideo).
+function getVideoThumbnailUrls(): string[] {
+  return Array.from(
+    document.querySelectorAll<HTMLImageElement>('flow-video-tile img.thumbnail')
+  )
+    .map((img) => img.getAttribute('src') ?? '')
+    .filter(Boolean);
+}
+
 function getAllTileIds(): Set<string> {
   const ids = new Set<string>();
   document.querySelectorAll<HTMLElement>('[data-media-id]').forEach((media) => {
     const id = media.getAttribute('data-media-id');
     if (id) ids.add(id);
   });
+  getVideoThumbnailUrls().forEach((url) => ids.add(url));
   return ids;
+}
+
+// Pasa el mouse por encima del tile para que Flow cargue su <video> y
+// devuelve la URL real. Sin esto no hay forma de bajar el video: el src
+// solo existe despues del hover.
+async function resolverUrlDeVideo(thumbnailUrl: string): Promise<string | null> {
+  const img = Array.from(
+    document.querySelectorAll<HTMLImageElement>('flow-video-tile img.thumbnail')
+  ).find((i) => i.getAttribute('src') === thumbnailUrl);
+  const tile = img?.closest<HTMLElement>('flow-video-tile');
+  if (!tile) return null;
+
+  await nativeHover(tile);
+  const video = await waitFor(() => {
+    const v = tile.querySelector<HTMLVideoElement>('video');
+    const src = v?.currentSrc || v?.src;
+    return src ? src : null;
+  }, 8000);
+  return video ?? null;
 }
 
 export function getMediaTileIds(): Set<string> {
@@ -66,23 +100,26 @@ type TileState =
 // nunca aparece con data-media-id y cae en el mismo timeout que cualquier
 // pendiente que tarda de mas (mas lento, pero no incorrecto). Si se
 // encuentra el marcado real de fallo, se puede reincorporar aqui.
+function esIdDeVideo(id: string): boolean {
+  // Los ids de video son la URL de la miniatura; los de imagen, un uuid.
+  return id.startsWith('http');
+}
+
 function getTileState(id: string): TileState {
+  if (esIdDeVideo(id)) {
+    // El tile de video ya existe con su miniatura cargada: eso alcanza para
+    // darlo por listo. Su URL real se resuelve aparte, con hover, porque el
+    // <video> no existe en el DOM hasta ese momento (ver resolverUrlDeVideo).
+    const existe = getVideoThumbnailUrls().includes(id);
+    return existe
+      ? { status: TileStatuses.Ready, isVideo: true, url: id }
+      : { status: TileStatuses.Pending };
+  }
+
   const media = document.querySelector<HTMLImageElement | HTMLVideoElement>(
     `[data-media-id="${CSS.escape(id)}"]`
   );
   if (!media) return { status: TileStatuses.Pending };
-
-  if (media.tagName === 'VIDEO') {
-    const video = media as HTMLVideoElement;
-    // Unlike vibes.ai, Google Flow's <video> doesn't preload metadata on its
-    // own — readyState can stay 0 indefinitely even once the video is done
-    // server-side, so it's not a usable readiness signal here. A real src
-    // is the only thing to go by.
-    const src = video.currentSrc || video.src;
-    return src
-      ? { status: TileStatuses.Ready, isVideo: true, url: src }
-      : { status: TileStatuses.Pending };
-  }
 
   const img = media as HTMLImageElement;
   if (!img.complete || img.naturalWidth === 0 || !img.src) return { status: TileStatuses.Pending };
@@ -153,8 +190,9 @@ export async function waitForNewMedia(
     const isStable = stableSince !== null && Date.now() - stableSince >= MEDIA_STABILIZE_MS;
 
     if (!stillPending && (reachedMax || isStable)) {
-      return readyUrls.length > 0
-        ? { status: MediaPollStatuses.Success, urls: readyUrls }
+      const urls = await resolverUrls(readyUrls, isVideo);
+      return urls.length > 0
+        ? { status: MediaPollStatuses.Success, urls }
         : { status: MediaPollStatuses.NoSuccess };
     }
 
@@ -163,12 +201,28 @@ export async function waitForNewMedia(
 
   // Timed out — whatever's ready counts as a partial success, same as
   // vibes.ai: at least 1 ready slot is enough, the rest are simply skipped.
-  const finalUrls = [...getAllTileIds()]
+  const finalIds = [...getAllTileIds()]
     .filter((id) => !beforeIds.has(id))
     .map((id) => getTileState(id))
     .flatMap((s) => (s.status === TileStatuses.Ready && s.isVideo === isVideo ? [s.url] : []));
 
+  const finalUrls = await resolverUrls(finalIds, isVideo);
   return finalUrls.length > 0
     ? { status: MediaPollStatuses.Success, urls: finalUrls }
     : { status: MediaPollStatuses.NoSuccess };
+}
+
+// En modo video, lo que se junto hasta aca son URLs de MINIATURA: hay que
+// pasar el mouse por cada tile para que Flow cargue su <video> y recien ahi
+// se puede leer la URL real que se va a descargar. En modo imagen ya son
+// las URLs finales y no hay nada que resolver.
+async function resolverUrls(urls: string[], isVideo: boolean): Promise<string[]> {
+  if (!isVideo) return urls;
+  const resueltas: string[] = [];
+  for (const thumbnailUrl of urls) {
+    if (aborted) break;
+    const real = await resolverUrlDeVideo(thumbnailUrl);
+    if (real) resueltas.push(real);
+  }
+  return resueltas;
 }

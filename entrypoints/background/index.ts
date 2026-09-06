@@ -8,7 +8,7 @@ import {
   advanceAfterPendingWrite,
   markSceneErrorAndAdvance,
 } from './sceneOrchestration';
-import { nativeClick, nativeType, nativeUploadFile } from './nativeInput';
+import { nativeClick, nativeType, nativeHover, nativeUploadFile } from './nativeInput';
 import { saveTempFileForUpload, scheduleTempCleanup } from './downloadFile';
 
 export default defineBackground(() => {
@@ -105,6 +105,14 @@ export default defineBackground(() => {
       const tabId = batchStore.batch?.tabId ?? sender.tab?.id;
       if (!tabId) return;
       await nativeType(tabId, text);
+      return { ok: true };
+    }
+
+    if (message.action === Actions.NativeHover) {
+      const { x, y } = message;
+      const tabId = batchStore.batch?.tabId ?? sender.tab?.id;
+      if (!tabId) return;
+      await nativeHover(tabId, x, y);
       return { ok: true };
     }
 

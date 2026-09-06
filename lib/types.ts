@@ -11,6 +11,7 @@ export const Actions = {
   NativeClick: 'native_click',
   NativeType: 'native_type',
   NativeUploadFile: 'native_upload_file',
+  NativeHover: 'native_hover',
   ConvertDataUrlToBlobUrl: 'convert_data_url_to_blob_url',
 } as const;
 
@@ -181,6 +182,15 @@ export interface NativeTypeMessage {
   text: string;
 }
 
+// Hover real sobre unas coordenadas. flow.google.com solo carga el <video>
+// de cada resultado cuando el mouse pasa por encima; un mouseenter
+// sintetico no alcanza (ver nativeHover en background/nativeInput.ts).
+export interface NativeHoverMessage {
+  action: typeof Actions.NativeHover;
+  x: number;
+  y: number;
+}
+
 // El rediseno de flow.google.com (2026-09) quito el <input type="file">
 // persistente que la version vieja inyectaba directo por DataTransfer: el
 // boton "Subir" ahora crea el input al vuelo, ligado a abrir de una el
@@ -225,5 +235,6 @@ export type ExtensionMessage =
   | LogMessage
   | NativeClickMessage
   | NativeTypeMessage
+  | NativeHoverMessage
   | NativeUploadFileMessage
   | ConvertDataUrlToBlobUrlMessage;
