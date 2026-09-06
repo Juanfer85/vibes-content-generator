@@ -172,7 +172,16 @@ export async function waitForNewMedia(
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (aborted) return { status: MediaPollStatuses.Aborted };
 
-    const newIds = [...getAllTileIds()].filter((id) => !beforeIds.has(id));
+    // Solo cuentan las novedades DEL MISMO TIPO que se esta esperando.
+    // Sin este filtro, en modo video la imagen que se acaba de subir como
+    // start frame contaba como "novedad ya lista": no quedaba nada
+    // pendiente, la ventana de estabilizacion se cumplia a los 3s y la
+    // espera terminaba de inmediato sin video -> "no salio nada" ->
+    // reintento -> otra subida de la misma imagen, en bucle infinito, sin
+    // llegar nunca a esperar el video de verdad.
+    const newIds = [...getAllTileIds()]
+      .filter((id) => !beforeIds.has(id))
+      .filter((id) => esIdDeVideo(id) === isVideo);
     const states = newIds.map((id) => getTileState(id));
     const stillPending = states.some((s) => s.status === TileStatuses.Pending);
     const readyUrls = states.flatMap((s) =>
@@ -203,6 +212,7 @@ export async function waitForNewMedia(
   // vibes.ai: at least 1 ready slot is enough, the rest are simply skipped.
   const finalIds = [...getAllTileIds()]
     .filter((id) => !beforeIds.has(id))
+    .filter((id) => esIdDeVideo(id) === isVideo)
     .map((id) => getTileState(id))
     .flatMap((s) => (s.status === TileStatuses.Ready && s.isVideo === isVideo ? [s.url] : []));
 
