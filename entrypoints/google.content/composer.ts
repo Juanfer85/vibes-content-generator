@@ -1,4 +1,4 @@
-import { sleep, nativeClick, nativeType } from './domUtils';
+import { sleep, nativeClick, nativeType, waitFor } from './domUtils';
 
 export function getComposer(): HTMLElement | null {
   // Google migro el editor de Slate.js a ProseMirror al mudar Flow de
@@ -48,32 +48,24 @@ function getVisibleArrowButtons(): HTMLButtonElement[] {
   ) as HTMLButtonElement[];
 }
 
-// Clicks the submit button, handling both the collapsed (1 button) and
-// expanded (2+ buttons) states of the Google Flow composer.
-export async function submitPrompt(composer: HTMLElement): Promise<boolean> {
-  const arrowBtns = getVisibleArrowButtons();
-  if (arrowBtns.length === 0) return false;
+// UN SOLO clic. La version vieja tenia un baile de estados
+// "colapsado/expandido": si encontraba un unico boton, mandaba Enter,
+// clickeaba, esperaba 2.5s y VOLVIA A CLICKEAR. En el rediseno de
+// flow.google.com (2026-09) hay un unico boton "Iniciar generación"
+// siempre, asi que ese camino se tomaba siempre y enviaba DOS VECES:
+// el primer envio salia bien (con el start frame adjunto), Flow consumia
+// y limpiaba el frame, y el segundo clic disparaba una generacion extra
+// SIN imagen adjunta -- animando cualquier otra cosa a partir del texto.
+// Ese era el sintoma reportado: "sube la imagen pero anima otra distinta".
+export async function submitPrompt(_composer: HTMLElement): Promise<boolean> {
+  // Angular puede tardar un instante en habilitar el boton despues de que
+  // el texto entra al editor.
+  const btn = await waitFor(() => {
+    const habilitados = getVisibleArrowButtons().filter((b) => !b.disabled);
+    return habilitados[habilitados.length - 1] ?? null;
+  }, 5000);
+  if (!btn) return false;
 
-  if (arrowBtns.length === 1) {
-    // Collapsed state — simulate Enter to trigger expansion, then native-click
-    // the button in the expanded state.
-    const firstBtn = arrowBtns[0];
-    const enterOpts = { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true, cancelable: true };
-    composer.dispatchEvent(new KeyboardEvent('keydown', enterOpts));
-    composer.dispatchEvent(new KeyboardEvent('keypress', enterOpts));
-    composer.dispatchEvent(new KeyboardEvent('keyup', enterOpts));
-    await sleep(500);
-
-    await nativeClick(firstBtn);
-    await sleep(2500);
-
-    const currentBtns = getVisibleArrowButtons();
-    if (currentBtns.length === 0) return false;
-    await nativeClick(currentBtns[currentBtns.length - 1]);
-    return true;
-  }
-
-  // Expanded state — native-click the last (submit) button directly.
-  await nativeClick(arrowBtns[arrowBtns.length - 1]);
+  await nativeClick(btn);
   return true;
 }

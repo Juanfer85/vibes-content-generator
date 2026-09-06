@@ -44,14 +44,16 @@ function findInitialFrameTrigger(): HTMLElement | null {
   );
 }
 
-// NO VERIFICADO EN VIVO: no hay evidencia todavia de como se ve "Inicio"
-// una vez que YA tiene una imagen adjunta bajo el rediseno nuevo, asi que
-// esto probablemente siempre da false (el atributo data-card-open era de
-// la version vieja). El efecto practico es que attachStartFrame() puede
-// volver a subir y elegir la imagen aunque ya estuviera adjunta -- mas
-// lento en un reintento, pero no incorrecto.
+// VERIFICADO EN VIVO el 2026-09-06: al adjuntar una imagen, el
+// `button.empty-chip` con texto "Inicio" DESAPARECE (queda solo el de
+// "Fin") y en su lugar aparece un `button.chip-container` con la
+// miniatura adentro. Su ausencia es entonces la señal de que ya hay algo
+// adjunto. Antes esto miraba `button[data-card-open]`, atributo de la
+// version vieja que ya no existe: daba siempre false, y por eso cada
+// reintento volvia a subir un archivo nuevo (de ahi la pila de .jpg con
+// nombre UUID acumulados en el proyecto).
 function isStartFrameAttached(): boolean {
-  return !!document.querySelector('button[data-card-open]');
+  return !findInitialFrameTrigger();
 }
 
 function findAddMediaMenuButton(): HTMLElement | null {
