@@ -154,6 +154,13 @@ export async function nativeUploadFile(
       try {
         await attachWithRetry(tabId);
         await browser.debugger.sendCommand({ tabId }, 'Page.enable', {});
+        // DOM.setFileInputFiles pertenece al dominio DOM, no a Page: sin
+        // habilitarlo, el comando puede devolver exito sin surtir efecto
+        // real sobre el nodo (backendNodeId existe igual, pero el dominio
+        // que lo resuelve no estaba activo). Coincide exactamente con el
+        // sintoma visto en vivo el 2026-09-05: la intercepcion reporta
+        // exito pero el archivo nunca llega a subirse en Flow.
+        await browser.debugger.sendCommand({ tabId }, 'DOM.enable', {});
         await browser.debugger.sendCommand(
           { tabId },
           'Page.setInterceptFileChooserDialog',

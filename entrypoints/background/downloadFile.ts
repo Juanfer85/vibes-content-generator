@@ -81,9 +81,11 @@ export async function saveTempFileForUpload(
 
   return new Promise((resolve) => {
     let settled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
     const finish = (path: string | null) => {
       if (settled) return;
       settled = true;
+      if (timeoutId) clearTimeout(timeoutId);
       browser.downloads.onChanged.removeListener(onChanged);
       resolve(path ? { id: downloadId, path, realFileName: extractFileName(path) } : null);
     };
@@ -119,7 +121,7 @@ export async function saveTempFileForUpload(
       }
     });
 
-    setTimeout(() => {
+    timeoutId = setTimeout(() => {
       console.error('[saveTempFileForUpload] timeout esperando que termine la descarga');
       finish(null);
     }, DOWNLOAD_WAIT_TIMEOUT_MS);
