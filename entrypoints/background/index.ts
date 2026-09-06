@@ -8,7 +8,13 @@ import {
   advanceAfterPendingWrite,
   markSceneErrorAndAdvance,
 } from './sceneOrchestration';
-import { nativeClick, nativeType, nativeHover, nativeUploadFile } from './nativeInput';
+import {
+  nativeClick,
+  nativeType,
+  nativeHover,
+  nativeHoverClick,
+  nativeUploadFile,
+} from './nativeInput';
 import { saveTempFileForUpload, scheduleTempCleanup } from './downloadFile';
 
 export default defineBackground(() => {
@@ -113,6 +119,14 @@ export default defineBackground(() => {
       const tabId = batchStore.batch?.tabId ?? sender.tab?.id;
       if (!tabId) return;
       await nativeHover(tabId, x, y);
+      return { ok: true };
+    }
+
+    if (message.action === Actions.NativeHoverClick) {
+      const { hoverX, hoverY, clickX, clickY } = message;
+      const tabId = batchStore.batch?.tabId ?? sender.tab?.id;
+      if (!tabId) return;
+      await nativeHoverClick(tabId, hoverX, hoverY, clickX, clickY);
       return { ok: true };
     }
 

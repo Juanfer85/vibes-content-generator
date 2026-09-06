@@ -12,6 +12,7 @@ export const Actions = {
   NativeType: 'native_type',
   NativeUploadFile: 'native_upload_file',
   NativeHover: 'native_hover',
+  NativeHoverClick: 'native_hover_click',
   ConvertDataUrlToBlobUrl: 'convert_data_url_to_blob_url',
 } as const;
 
@@ -191,6 +192,17 @@ export interface NativeHoverMessage {
   y: number;
 }
 
+// Hover y clic en la MISMA sesion de depurador: al soltarlo se pierde el
+// estado de "mouse encima" y los controles que Flow solo muestra al pasar
+// el mouse desaparecen antes del clic (ver nativeHoverClick).
+export interface NativeHoverClickMessage {
+  action: typeof Actions.NativeHoverClick;
+  hoverX: number;
+  hoverY: number;
+  clickX: number;
+  clickY: number;
+}
+
 // El rediseno de flow.google.com (2026-09) quito el <input type="file">
 // persistente que la version vieja inyectaba directo por DataTransfer: el
 // boton "Subir" ahora crea el input al vuelo, ligado a abrir de una el
@@ -236,5 +248,6 @@ export type ExtensionMessage =
   | NativeClickMessage
   | NativeTypeMessage
   | NativeHoverMessage
+  | NativeHoverClickMessage
   | NativeUploadFileMessage
   | ConvertDataUrlToBlobUrlMessage;

@@ -71,6 +71,54 @@ export async function nativeHover(tabId: number, x: number, y: number) {
   }
 }
 
+// Hover + clic en UNA SOLA sesion de depurador. Hace falta porque al
+// soltar el depurador se pierde el estado de "mouse encima": los botones
+// que Flow solo muestra al pasar el mouse (el ⋮ de cada recuadro) se
+// vuelven a ocultar, y el clic siguiente atraviesa hasta la imagen de
+// abajo, abriendola en vez de abrir el menu (visto en vivo el 2026-09-06).
+export async function nativeHoverClick(
+  tabId: number,
+  hoverX: number,
+  hoverY: number,
+  clickX: number,
+  clickY: number
+) {
+  try {
+    await attachWithRetry(tabId);
+    await browser.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: hoverX,
+      y: hoverY,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    // Un segundo movimiento, ya sobre el boton: algunos menus solo se
+    // activan cuando el puntero entra en el boton mismo.
+    await browser.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: clickX,
+      y: clickY,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await browser.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x: clickX,
+      y: clickY,
+      button: 'left',
+      clickCount: 1,
+    });
+    await browser.debugger.sendCommand({ tabId }, 'Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x: clickX,
+      y: clickY,
+      button: 'left',
+      clickCount: 1,
+    });
+    await browser.debugger.detach({ tabId });
+  } catch (err) {
+    console.error('[nativeHoverClick] falló:', err);
+  }
+}
+
 export async function nativeType(tabId: number, text: string) {
   try {
     await attachWithRetry(tabId);

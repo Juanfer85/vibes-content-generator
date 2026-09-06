@@ -1,7 +1,13 @@
 import { Actions, LogKinds, LogLevels } from '../../lib/types';
 import { log } from './log';
 import { aborted } from './abortState';
-import { sleepAbortable, waitFor, nativeClick, nativeHover } from './domUtils';
+import {
+  sleepAbortable,
+  waitFor,
+  nativeClick,
+  nativeHover,
+  nativeHoverClick,
+} from './domUtils';
 import {
   UPLOAD_WAIT_TIMEOUT_MS,
   MAX_UPLOAD_ATTEMPTS,
@@ -120,7 +126,8 @@ function findTileByMediaId(id: string): HTMLElement | null {
 // "Selecciona una imagen de encuadre", buscarla en la lista, seleccionarla
 // y confirmar), que era donde la imagen se perdia una y otra vez.
 async function animarDesdeLaGaleria(tile: HTMLElement): Promise<boolean> {
-  // Los botones del tile (⋮ incluido) solo aparecen con el mouse encima.
+  // Primer hover: hace que Flow renderice los controles del recuadro, para
+  // poder leer la posicion real del ⋮.
   await nativeHover(tile);
 
   const menuBtn = await waitFor(
@@ -131,7 +138,11 @@ async function animarDesdeLaGaleria(tile: HTMLElement): Promise<boolean> {
     4000
   );
   if (!menuBtn) return false;
-  await nativeClick(menuBtn);
+
+  // Hover + clic juntos: si van por separado, al soltar el depurador se
+  // pierde el "mouse encima", el ⋮ se oculta y el clic cae sobre la imagen,
+  // abriendola en el editor en vez de abrir el menu (visto en vivo).
+  await nativeHoverClick(tile, menuBtn);
 
   const animar = await waitFor(
     () =>

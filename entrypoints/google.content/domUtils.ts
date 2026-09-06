@@ -48,6 +48,27 @@ export async function nativeHover(element: HTMLElement): Promise<void> {
   await sleep(300);
 }
 
+// Hover sobre un elemento y clic sobre otro, en la MISMA sesion de
+// depurador. Necesario para los controles que Flow solo muestra al pasar
+// el mouse (el ⋮ de cada recuadro): si el hover y el clic van en sesiones
+// separadas, al soltar el depurador se pierde el "mouse encima", el boton
+// se oculta y el clic termina cayendo sobre la imagen de abajo.
+export async function nativeHoverClick(
+  hoverTarget: HTMLElement,
+  clickTarget: HTMLElement
+): Promise<void> {
+  const h = hoverTarget.getBoundingClientRect();
+  const c = clickTarget.getBoundingClientRect();
+  await browser.runtime.sendMessage({
+    action: Actions.NativeHoverClick,
+    hoverX: Math.round(h.left + h.width / 2),
+    hoverY: Math.round(h.top + h.height / 2),
+    clickX: Math.round(c.left + c.width / 2),
+    clickY: Math.round(c.top + c.height / 2),
+  });
+  await sleep(400);
+}
+
 export async function nativeType(text: string): Promise<void> {
   await browser.runtime.sendMessage({ action: Actions.NativeType, text });
   await sleep(100);
