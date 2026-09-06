@@ -128,6 +128,22 @@ export async function saveTempFileForUpload(
   });
 }
 
+// Cuanto se espera antes de borrar el archivo temporal. No puede ser
+// inmediato: DOM.setFileInputFiles solo hace que el input APUNTE al archivo,
+// y Flow recien lee esos bytes del disco despues, al procesar el change y
+// subirlo a su backend. Borrarlo antes de eso deja a Flow sin nada que leer
+// y la subida muere en silencio (confirmado en vivo el 2026-09-05).
+const CLEANUP_DELAY_MS = 60000;
+
+// Borrado best-effort y diferido. Si el service worker se duerme antes de
+// que dispare, queda un archivo suelto en Descargas -- preferible a romper
+// la subida por borrar demasiado pronto.
+export function scheduleTempCleanup(download: TempDownload): void {
+  setTimeout(() => {
+    void cleanupTempDownload(download);
+  }, CLEANUP_DELAY_MS);
+}
+
 export async function cleanupTempDownload(download: TempDownload): Promise<void> {
   try {
     await browser.downloads.removeFile(download.id);

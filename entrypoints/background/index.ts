@@ -9,7 +9,7 @@ import {
   markSceneErrorAndAdvance,
 } from './sceneOrchestration';
 import { nativeClick, nativeType, nativeUploadFile } from './nativeInput';
-import { saveTempFileForUpload, cleanupTempDownload } from './downloadFile';
+import { saveTempFileForUpload, scheduleTempCleanup } from './downloadFile';
 
 export default defineBackground(() => {
   browser.runtime.onMessage.addListener(async (message: ExtensionMessage, sender) => {
@@ -123,7 +123,16 @@ export default defineBackground(() => {
 
       const ok = await nativeUploadFile(tabId, x, y, saved.path);
       console.log('[NativeUploadFile] resultado de la intercepción:', ok);
-      await cleanupTempDownload(saved);
+
+      // OJO: el borrado NO puede ser inmediato. DOM.setFileInputFiles solo
+      // hace que el input APUNTE al archivo en disco; Flow recien lee esos
+      // bytes despues, cuando su propio JS procesa el change y los sube a su
+      // backend. Borrarlo aca mismo dejaba a Flow sin nada que leer y la
+      // subida moria en silencio -- la intercepcion reportaba exito, pero el
+      // archivo nunca aparecia en la pestaña "Subidas" (confirmado en vivo el
+      // 2026-09-05, con la unica excepcion de un intento temprano cuyo
+      // borrado debe haber fallado, y que por eso SI se subio).
+      scheduleTempCleanup(saved);
       // realFileName casi nunca es igual a uploadName -- Chrome le pone su
       // propio nombre al archivo temporal sin importar lo que se le pida
       // (ver downloadFile.ts). Es lo que Flow va a mostrar como titulo, asi
