@@ -56,6 +56,22 @@ function isStartFrameAttached(): boolean {
   return !findInitialFrameTrigger();
 }
 
+// Quita la imagen ya adjunta. VERIFICADO EN VIVO el 2026-09-06: el chip es
+// un `button.chip-container` con un <mat-icon>cancel</mat-icon> adentro;
+// clickear ese icono lo quita y "Inicio" vuelve a aparecer como
+// empty-chip.
+async function detachStartFrame(): Promise<void> {
+  const chip = document.querySelector<HTMLElement>('button.chip-container');
+  const cancel = chip
+    ? Array.from(chip.querySelectorAll<HTMLElement>('mat-icon')).find(
+        (i) => i.textContent?.trim() === 'cancel'
+      )
+    : null;
+  if (!cancel) return;
+  await nativeClick(cancel);
+  await waitFor(() => (isStartFrameAttached() ? null : true), 4000);
+}
+
 function findAddMediaMenuButton(): HTMLElement | null {
   return document.querySelector<HTMLElement>(
     'button[aria-label="Menú para añadir contenido multimedia"]'
@@ -278,16 +294,38 @@ async function uploadWithRetries(
   return attempt;
 }
 
-// Idempotent — safe to call before every generation attempt, not just the
-// first. A failed generation can reset the composer and drop the attached
-// frame, so a retry needs it re-checked (and re-uploaded if it's gone)
-// before resubmitting, or it'd send the prompt with no reference image.
+// De que escena es la imagen que esta adjunta ahora mismo. Sin esto, el
+// atajo "ya hay algo adjunto -> listo" haria que la escena 5 animara la
+// imagen de la escena 3: cada escena tiene SU imagen, y adjuntar la
+// equivocada es justo el error que se ve como "anima otra cosa".
+let escenaDelFrameAdjunto: number | null = null;
+
+// Se llama antes de CADA intento de generacion, no solo del primero: un
+// intento fallido puede dejar el composer reseteado y sin la imagen, asi
+// que hay que revisarlo (y volver a subirla si desaparecio) antes de cada
+// reenvio, o se mandaria el prompt sin imagen de referencia.
 export async function attachStartFrame(
   imageBase64: string,
   imageName: string,
   sceneNumber: number
 ): Promise<boolean> {
-  if (isStartFrameAttached()) return true;
+  if (isStartFrameAttached()) {
+    // Reintento de la MISMA escena: la imagen que ya esta puesta sirve.
+    if (escenaDelFrameAdjunto === sceneNumber) return true;
+    // Sobro de una escena anterior: hay que sacarla antes de poner la que
+    // corresponde, o esta escena se animaria con la imagen equivocada.
+    await detachStartFrame();
+    escenaDelFrameAdjunto = null;
+    if (isStartFrameAttached()) {
+      log({
+        sceneNumber,
+        step: 'No se pudo quitar el start frame de la escena anterior',
+        kind: LogKinds.Error,
+        level: LogLevels.Step,
+      });
+      return false;
+    }
+  }
 
   log({ sceneNumber, step: 'Adjuntando start frame', kind: LogKinds.Info, level: LogLevels.Step });
 
@@ -304,6 +342,7 @@ export async function attachStartFrame(
     return false;
   }
 
+  escenaDelFrameAdjunto = sceneNumber;
   log({ sceneNumber, step: 'Start frame subido', kind: LogKinds.Success, level: LogLevels.Step });
   return true;
 }
