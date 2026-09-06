@@ -152,6 +152,53 @@ export type MediaPollResult =
   | { status: typeof MediaPollStatuses.NoSuccess }
   | { status: typeof MediaPollStatuses.Aborted };
 
+// VERIFICADO EN VIVO el 2026-09-06: la galeria usa scroll virtual (Angular
+// CDK) -- las miniaturas viejas se DESMONTAN del DOM cuando quedan fuera de
+// la ventana renderizada, y se pueden volver a MONTAR despues si el layout
+// se reacomoda. Comparar "que hay ahora" contra un Set de "que habia antes"
+// (como se hace mas abajo para imagenes, con data-media-id) es fragil para
+// video: si una miniatura VIEJA que no estaba montada cuando se capturo
+// `beforeIds` se vuelve a montar mientras se espera, el diff la confunde
+// con LA NUEVA de verdad. Esto fue la causa real de los videos duplicados
+// del 2026-09-06 (varias escenas seguidas terminaron con el video de una
+// escena anterior, reaparecida por el scroll virtual).
+//
+// La salida: Flow ordena "Recientes" primero, asi que el video nuevo
+// SIEMPRE aparece en la POSICION 0 de la lista -- la unica posicion
+// garantizada de estar siempre montada, sin importar el scroll virtual. Se
+// espera a que esa posicion cambie de valor Y se mantenga estable unos
+// segundos (Flow puede mostrar un resultado parcial antes del definitivo).
+//
+// Asume "x1" (una sola salida por envio), que es la configuracion en uso
+// actualmente. Con "Numero de salidas" en x2 o mas, esto solo capturaria
+// UNA de las variantes -- si algun dia se usa asi, hay que revisar esto.
+async function waitForTopVideoChange(urlAntes: string | null): Promise<string | null> {
+  let ultimoTop: string | null = null;
+  let estableDesde: number | null = null;
+
+  for (let intento = 0; intento < VIDEO_MEDIA_POLL_MAX_ATTEMPTS; intento++) {
+    if (aborted) return null;
+
+    const topActual = getVideoThumbnailUrls()[0] ?? null;
+    const esNuevo = topActual !== null && topActual !== urlAntes;
+
+    if (esNuevo) {
+      if (topActual !== ultimoTop) {
+        ultimoTop = topActual;
+        estableDesde = Date.now();
+      } else if (estableDesde !== null && Date.now() - estableDesde >= MEDIA_STABILIZE_MS) {
+        return topActual;
+      }
+    } else {
+      ultimoTop = null;
+      estableDesde = null;
+    }
+
+    await sleep(MEDIA_POLL_INTERVAL_MS);
+  }
+  return ultimoTop; // lo mejor que se vio, aunque no llegara a estabilizar
+}
+
 // Diffs the current tile ids against beforeIds to find this generation's
 // results, and waits for every one of them to settle (ready or failed —
 // none still pending). New ids can keep appearing over time (Google Flow
@@ -159,34 +206,43 @@ export type MediaPollResult =
 // pending, the id count must also hold steady for MEDIA_STABILIZE_MS before
 // calling it done — otherwise a variant whose wrapper hasn't even mounted
 // yet gets abandoned.
+//
+// Los VIDEOS usan un camino aparte (waitForTopVideoChange, arriba) en vez
+// de este diff por conjunto: ver el comentario de esa funcion para el
+// motivo. `beforeIds` se ignora para video a proposito.
 export async function waitForNewMedia(
   beforeIds: Set<string>,
   mode: BatchMode = BatchModes.Image
 ): Promise<MediaPollResult> {
   const isVideo = mode === BatchModes.Video;
-  const maxAttempts = isVideo ? VIDEO_MEDIA_POLL_MAX_ATTEMPTS : IMAGE_MEDIA_POLL_MAX_ATTEMPTS;
 
+  if (isVideo) {
+    const topAntes = getVideoThumbnailUrls()[0] ?? null;
+    const nuevaThumb = await waitForTopVideoChange(topAntes);
+    if (aborted) return { status: MediaPollStatuses.Aborted };
+    if (!nuevaThumb) return { status: MediaPollStatuses.NoSuccess };
+    const real = await resolverUrlDeVideo(nuevaThumb);
+    return real
+      ? { status: MediaPollStatuses.Success, urls: [real] }
+      : { status: MediaPollStatuses.NoSuccess };
+  }
+
+  // De aca para abajo, solo modo imagen (el video ya salio por su propio
+  // camino arriba). Se sigue filtrando por "no es id de video" por las
+  // dudas, aunque en la practica los ids de video no deberian mezclarse
+  // aca -- no cuesta nada la guardia.
   let lastCount = 0;
   let stableSince: number | null = null;
 
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+  for (let attempt = 0; attempt < IMAGE_MEDIA_POLL_MAX_ATTEMPTS; attempt++) {
     if (aborted) return { status: MediaPollStatuses.Aborted };
 
-    // Solo cuentan las novedades DEL MISMO TIPO que se esta esperando.
-    // Sin este filtro, en modo video la imagen que se acaba de subir como
-    // start frame contaba como "novedad ya lista": no quedaba nada
-    // pendiente, la ventana de estabilizacion se cumplia a los 3s y la
-    // espera terminaba de inmediato sin video -> "no salio nada" ->
-    // reintento -> otra subida de la misma imagen, en bucle infinito, sin
-    // llegar nunca a esperar el video de verdad.
     const newIds = [...getAllTileIds()]
       .filter((id) => !beforeIds.has(id))
-      .filter((id) => esIdDeVideo(id) === isVideo);
+      .filter((id) => !esIdDeVideo(id));
     const states = newIds.map((id) => getTileState(id));
     const stillPending = states.some((s) => s.status === TileStatuses.Pending);
-    const readyUrls = states.flatMap((s) =>
-      s.status === TileStatuses.Ready && s.isVideo === isVideo ? [s.url] : []
-    );
+    const readyUrls = states.flatMap((s) => (s.status === TileStatuses.Ready ? [s.url] : []));
 
     if (newIds.length !== lastCount) {
       // El conteo de ids nuevos cambió (llegó otro wrapper): reinicia la
@@ -199,9 +255,8 @@ export async function waitForNewMedia(
     const isStable = stableSince !== null && Date.now() - stableSince >= MEDIA_STABILIZE_MS;
 
     if (!stillPending && (reachedMax || isStable)) {
-      const urls = await resolverUrls(readyUrls, isVideo);
-      return urls.length > 0
-        ? { status: MediaPollStatuses.Success, urls }
+      return readyUrls.length > 0
+        ? { status: MediaPollStatuses.Success, urls: readyUrls }
         : { status: MediaPollStatuses.NoSuccess };
     }
 
@@ -210,29 +265,13 @@ export async function waitForNewMedia(
 
   // Timed out — whatever's ready counts as a partial success, same as
   // vibes.ai: at least 1 ready slot is enough, the rest are simply skipped.
-  const finalIds = [...getAllTileIds()]
+  const finalUrls = [...getAllTileIds()]
     .filter((id) => !beforeIds.has(id))
-    .filter((id) => esIdDeVideo(id) === isVideo)
+    .filter((id) => !esIdDeVideo(id))
     .map((id) => getTileState(id))
-    .flatMap((s) => (s.status === TileStatuses.Ready && s.isVideo === isVideo ? [s.url] : []));
+    .flatMap((s) => (s.status === TileStatuses.Ready ? [s.url] : []));
 
-  const finalUrls = await resolverUrls(finalIds, isVideo);
   return finalUrls.length > 0
     ? { status: MediaPollStatuses.Success, urls: finalUrls }
     : { status: MediaPollStatuses.NoSuccess };
-}
-
-// En modo video, lo que se junto hasta aca son URLs de MINIATURA: hay que
-// pasar el mouse por cada tile para que Flow cargue su <video> y recien ahi
-// se puede leer la URL real que se va a descargar. En modo imagen ya son
-// las URLs finales y no hay nada que resolver.
-async function resolverUrls(urls: string[], isVideo: boolean): Promise<string[]> {
-  if (!isVideo) return urls;
-  const resueltas: string[] = [];
-  for (const thumbnailUrl of urls) {
-    if (aborted) break;
-    const real = await resolverUrlDeVideo(thumbnailUrl);
-    if (real) resueltas.push(real);
-  }
-  return resueltas;
 }
