@@ -4,7 +4,7 @@ export default defineConfig({
   modules: ['@wxt-dev/module-react'],
   manifest: {
     name: 'AI Content Generator',
-    version: '1.0.23',
+    version: '1.0.24',
     // 'downloads' y 'offscreen' son nuevos (2026-09): 'downloads' hace
     // falta para materializar la imagen del start frame como archivo real
     // en disco (unica forma de interceptar el selector de archivo de

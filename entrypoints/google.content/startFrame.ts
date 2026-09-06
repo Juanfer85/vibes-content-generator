@@ -93,10 +93,15 @@ function findUploadedOption(uploadName: string): HTMLElement | null {
   return title?.closest<HTMLElement>('button[role="option"]') ?? null;
 }
 
+// Solo cuenta si esta HABILITADO. Confirmado en vivo el 2026-09-06: la
+// imagen recien subida aparece en la lista enseguida, pero sigue
+// procesandose un rato (miniatura con spinner) y mientras tanto "Añadir a
+// petición" esta deshabilitado. Devolverlo igual hacia que confirmSelection
+// le clickeara sin efecto y el panel nunca se cerrara.
 function findAddToPromptButton(): HTMLButtonElement | null {
   return (
-    Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
-      hasText(b, 'Añadir a petición')
+    Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find(
+      (b) => hasText(b, 'Añadir a petición') && !b.disabled
     ) ?? null
   );
 }
@@ -162,7 +167,9 @@ const failed = (reason: string): Attempt => ({ result: UploadResults.Failed, rea
 
 async function confirmSelection(): Promise<Attempt> {
   for (let attempt = 1; attempt <= MAX_CONFIRM_ATTEMPTS; attempt++) {
-    const confirmBtn = await waitFor(() => findAddToPromptButton());
+    // Margen amplio: el boton recien se habilita cuando Flow termina de
+    // procesar la imagen subida (ver findAddToPromptButton).
+    const confirmBtn = await waitFor(() => findAddToPromptButton(), UPLOAD_WAIT_TIMEOUT_MS);
     if (aborted) return ok(UploadResults.Aborted);
     if (!confirmBtn) return failed('No se encontró el botón "Añadir a petición"');
     await nativeClick(confirmBtn);
