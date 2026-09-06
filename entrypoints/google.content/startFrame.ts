@@ -112,11 +112,18 @@ function centerOf(element: HTMLElement): { x: number; y: number } {
 // el dialogo -- no puede ser un nativeClick suelto de domUtils.ts, porque
 // la intercepcion tiene que estar activa ANTES de que el clic dispare el
 // dialogo nativo.
+//
+// VERIFICADO EN VIVO el 2026-09-05: chrome.downloads.download() ignora el
+// `uploadName` pedido y le pone al archivo su propio nombre (un data: URL
+// termino en "descarga.jpg", un blob: URL en un UUID propio de Chrome) --
+// asi que el nombre que Flow termina mostrando NO es `uploadName`, es el
+// que devuelve el background como `realFileName`. Ese es el que hay que
+// buscar despues en la lista, no el que se mando a pedir.
 async function uploadViaNativeChannel(
   uploadButton: HTMLElement,
   imageBase64: string,
   uploadName: string
-): Promise<boolean> {
+): Promise<string | null> {
   const { x, y } = centerOf(uploadButton);
   const respuesta = await browser.runtime.sendMessage({
     action: Actions.NativeUploadFile,
@@ -125,7 +132,8 @@ async function uploadViaNativeChannel(
     x,
     y,
   });
-  return !!respuesta?.ok;
+  if (!respuesta?.ok) return null;
+  return (respuesta.realFileName as string | undefined) ?? uploadName;
 }
 
 const UploadResults = {
@@ -181,9 +189,9 @@ async function attemptUpload(
   if (!uploadItem) return failed('No se encontró "Subir" en el menú "+"');
 
   const uploadName = `${crypto.randomUUID()}-${imageName}`;
-  const uploaded = await uploadViaNativeChannel(uploadItem, imageBase64, uploadName);
+  const realFileName = await uploadViaNativeChannel(uploadItem, imageBase64, uploadName);
   if (aborted) return ok(UploadResults.Aborted);
-  if (!uploaded) return failed('Falló la subida nativa (chrome.debugger)');
+  if (!realFileName) return failed('Falló la subida nativa (chrome.debugger)');
 
   // Paso 2: abrir "Inicio" y elegir el archivo recien subido de la lista.
   const trigger = findInitialFrameTrigger();
@@ -197,7 +205,7 @@ async function attemptUpload(
   if (aborted) return ok(UploadResults.Aborted);
   if (!opened) return failed('No se abrió "Selecciona una imagen de encuadre"');
 
-  const option = await waitFor(() => findUploadedOption(uploadName), UPLOAD_WAIT_TIMEOUT_MS);
+  const option = await waitFor(() => findUploadedOption(realFileName), UPLOAD_WAIT_TIMEOUT_MS);
   if (aborted) return ok(UploadResults.Aborted);
   if (!option) return failed('La imagen subida no apareció en la lista');
   await nativeClick(option);

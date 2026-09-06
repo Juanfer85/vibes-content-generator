@@ -4,14 +4,17 @@
 // que es lo que pide DOM.setFileInputFiles (ver nativeUploadFile en
 // nativeInput.ts). El archivo se borra despues de usarlo.
 //
-// VERIFICADO EN VIVO el 2026-09-05: chrome.downloads.download() IGNORA el
-// nombre de archivo pedido cuando la fuente es un data: URL -- termina
-// guardando algo generico tipo "descarga.jpg" en la carpeta raiz de
-// Descargas, sin importar el `filename` que se le pida. El archivo SI se
-// sube bien a Flow con ese nombre generico, pero como no coincide con el
-// nombre unico que el codigo espera despues, nunca lo encuentra en la
-// lista. Con un blob: URL (creado en offscreen.ts, porque
-// URL.createObjectURL necesita DOM) el nombre SI se respeta.
+// VERIFICADO EN VIVO el 2026-09-05, DOS VECES: chrome.downloads.download()
+// IGNORA el nombre de archivo pedido en el `filename`, tanto para un
+// data: URL (termino en "descarga.jpg", el generico localizado de Chrome)
+// como para un blob: URL creado en un offscreen document (termino en un
+// UUID propio de Chrome, ej. "341bef5f-....jpg") -- no se pudo confirmar
+// la causa exacta (¿alguna politica o configuracion de este Chrome en
+// particular?), pero en ambos casos el archivo SI se sube bien a Flow, solo
+// que con OTRO nombre. La solucion no es seguir peleando por controlar el
+// nombre: es usar el nombre real que Chrome termina poniendo (que al menos
+// es unico por ser un UUID propio) para buscarlo despues en la lista de
+// Flow, en vez del nombre que se pidio.
 import { Actions } from '../../lib/types';
 
 const DOWNLOAD_WAIT_TIMEOUT_MS = 8000;
@@ -44,6 +47,14 @@ async function dataUrlToBlobUrl(dataUrl: string): Promise<string | null> {
 export interface TempDownload {
   id: number;
   path: string;
+  // El nombre real que Chrome le puso al archivo (ultimo segmento de
+  // `path`), casi nunca igual al que se pidio -- ver comentario de arriba.
+  // Es lo que hay que buscar despues en la lista de Flow, no `uploadName`.
+  realFileName: string;
+}
+
+function extractFileName(path: string): string {
+  return path.split(/[\\/]/).pop() ?? path;
 }
 
 export async function saveTempFileForUpload(
@@ -74,7 +85,7 @@ export async function saveTempFileForUpload(
       if (settled) return;
       settled = true;
       browser.downloads.onChanged.removeListener(onChanged);
-      resolve(path ? { id: downloadId, path } : null);
+      resolve(path ? { id: downloadId, path, realFileName: extractFileName(path) } : null);
     };
 
     const onChanged = (delta: Browser.downloads.DownloadDelta) => {

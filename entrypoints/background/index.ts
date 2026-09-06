@@ -124,7 +124,12 @@ export default defineBackground(() => {
       const ok = await nativeUploadFile(tabId, x, y, saved.path);
       console.log('[NativeUploadFile] resultado de la intercepción:', ok);
       await cleanupTempDownload(saved);
-      return { ok };
+      // realFileName casi nunca es igual a uploadName -- Chrome le pone su
+      // propio nombre al archivo temporal sin importar lo que se le pida
+      // (ver downloadFile.ts). Es lo que Flow va a mostrar como titulo, asi
+      // que el content script tiene que buscar ESE nombre despues, no el
+      // que mando.
+      return { ok, realFileName: saved.realFileName };
     }
 
     return;
