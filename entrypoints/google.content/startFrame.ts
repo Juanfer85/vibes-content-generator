@@ -82,9 +82,15 @@ async function detachStartFrame(): Promise<void> {
   await waitFor(() => (isStartFrameAttached() ? null : true), 4000);
 }
 
+// Match por SUBSTRING del aria-label, no texto exacto: Flow ya le cambio la
+// redaccion una vez sin avisar (de "Menu para anadir contenido multimedia" a
+// "Agregar menu de contenido multimedia", verificado en vivo el 2026-09-07).
+// "contenido multimedia" es la parte que sobrevivio a ese cambio -- con
+// texto exacto, cualquier reordenamiento futuro de palabras vuelve a romper
+// esto en cascada, igual que paso con "Inicio" -> "Iniciar".
 function findAddMediaMenuButton(): HTMLElement | null {
   return document.querySelector<HTMLElement>(
-    'button[aria-label="Menú para añadir contenido multimedia"]'
+    'button[aria-label*="contenido multimedia"]'
   );
 }
 
