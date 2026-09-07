@@ -38,12 +38,18 @@ import {
 // original) y se busca ese mismo texto despues, en vez de tener que
 // distinguir por contenido visual.
 
-// El botón "Inicio"/"Fin" comparte la misma clase; se filtra por texto.
-// Antes decia "Inicial"; el rediseno lo renombro a "Inicio".
+// El botón "Iniciar"/"Finalizar" comparte la misma clase; se filtra por
+// texto. Ya paso de "Inicial" a "Inicio" y ahora, VERIFICADO EN VIVO el
+// 2026-09-07, de "Inicio" a "Iniciar" (con espacios alrededor en el
+// textContent real, de ahi el trim()). Cada cambio de texto sin arreglar
+// aca hace que isStartFrameAttached() de siempre `true` (nunca encuentra
+// el boton "vacio"), lo que dispara en cascada el intento de "quitar el
+// frame de la escena anterior" en TODAS las escenas del lote, aunque no
+// haya nada realmente adjunto.
 function findInitialFrameTrigger(): HTMLElement | null {
   return (
     Array.from(document.querySelectorAll<HTMLButtonElement>('button.empty-chip')).find(
-      (b) => b.textContent?.trim() === 'Inicio'
+      (b) => b.textContent?.trim() === 'Iniciar'
     ) ?? null
   );
 }
