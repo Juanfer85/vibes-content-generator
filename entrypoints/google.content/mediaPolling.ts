@@ -172,6 +172,20 @@ export type MediaPollResult =
 // Asume "x1" (una sola salida por envio), que es la configuracion en uso
 // actualmente. Con "Numero de salidas" en x2 o mas, esto solo capturaria
 // UNA de las variantes -- si algun dia se usa asi, hay que revisar esto.
+//
+// SEGUNDA BARRERA (2026-09-10): el chequeo de posicion 0 solo no alcanza.
+// Verificado en vivo sobre idea_000024: las escenas 3 y 5 de un lote de 12
+// terminaron con el MISMO video (byte a byte), con la escena 4 -- en el
+// medio -- perfectamente distinta. Eso descarta la reaparicion en el vecino
+// inmediato; lo que explica el patron es que el thumbnail de la escena 3
+// volvio a aparecer en la posicion 0 momentaneamente mientras se esperaba la
+// escena 5 (el mismo reacomodo del scroll virtual que motivo el fix
+// original, solo que dos escenas mas tarde). Flow nunca reutiliza la url de
+// un video real para una generacion nueva, asi que un thumbnail que ya se le
+// asigno a OTRA escena de esta misma sesion de pagina no puede ser de
+// verdad "nuevo": se descarta y se sigue esperando, en vez de aceptarlo.
+const thumbnailsYaUsados = new Set<string>();
+
 async function waitForTopVideoChange(urlAntes: string | null): Promise<string | null> {
   let ultimoTop: string | null = null;
   let estableDesde: number | null = null;
@@ -180,13 +194,15 @@ async function waitForTopVideoChange(urlAntes: string | null): Promise<string | 
     if (aborted) return null;
 
     const topActual = getVideoThumbnailUrls()[0] ?? null;
-    const esNuevo = topActual !== null && topActual !== urlAntes;
+    const esNuevo =
+      topActual !== null && topActual !== urlAntes && !thumbnailsYaUsados.has(topActual);
 
     if (esNuevo) {
       if (topActual !== ultimoTop) {
         ultimoTop = topActual;
         estableDesde = Date.now();
       } else if (estableDesde !== null && Date.now() - estableDesde >= MEDIA_STABILIZE_MS) {
+        thumbnailsYaUsados.add(topActual);
         return topActual;
       }
     } else {
@@ -196,6 +212,7 @@ async function waitForTopVideoChange(urlAntes: string | null): Promise<string | 
 
     await sleep(MEDIA_POLL_INTERVAL_MS);
   }
+  if (ultimoTop) thumbnailsYaUsados.add(ultimoTop);
   return ultimoTop; // lo mejor que se vio, aunque no llegara a estabilizar
 }
 
