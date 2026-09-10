@@ -237,9 +237,23 @@ async function attemptUpload(
 
   const addMediaBtn = findAddMediaMenuButton();
   if (!addMediaBtn) return failed('No se encontró el botón "+" del proyecto');
-  await nativeClick(addMediaBtn);
 
-  const uploadItem = await waitFor(() => findUploadMenuItem(), 4000);
+  // El boton "+" es un interruptor (toggle): un clic lo abre, otro lo
+  // cierra. VERIFICADO EN VIVO el 2026-09-10: si el menu tardaba en
+  // renderizar y esta funcion se reintentaba (uploadWithRetries), el clic
+  // del segundo intento caia sobre un menu que YA estaba abierto -- y lo
+  // cerraba, en vez de abrirlo. Eso explicaba fallar los 5 intentos
+  // seguidos con "No se encontro 'Subir'": el menu nunca llegaba a quedar
+  // abierto el tiempo suficiente. Por eso se chequea primero si ya esta
+  // abierto antes de clickear.
+  if (!findUploadMenuItem()) {
+    await nativeClick(addMediaBtn);
+  }
+
+  // Tambien se subio de 4s a 8s: el mismo dia se vio a Flow tardar mas de
+  // 4s en renderizar este menu sobre un proyecto con muchas escenas ya
+  // generadas (mas contenido cargado, mas lento).
+  const uploadItem = await waitFor(() => findUploadMenuItem(), 8000);
   if (aborted) return ok(UploadResults.Aborted);
   if (!uploadItem) return failed('No se encontró "Subir" en el menú "+"');
 
