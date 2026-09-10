@@ -64,13 +64,32 @@ export default function App() {
       // Pick the first successfully downloaded blob as the scene reference.
       // Using index 0 (instead of random) gives deterministic, reproducible results.
       const validBlobs = blobs.filter((b): b is Blob => b !== null);
-      if (validBlobs.length > 0) {
-        const refName =
-          pw.mode === BatchModes.Image
-            ? sceneRefImageName(pw.sceneNumber)
-            : sceneRefVideoName(pw.sceneNumber);
-        await writeBlobToFile(rootDir, refName, validBlobs[0]);
+
+      // Ni una sola descarga sirvio: la escena NO quedo guardada, por mas que
+      // Flow la haya generado bien. Avisar WriteDone aqui es lo que hacia que
+      // el batch la diera por lista (`advanceAfterPendingWrite` la marca Done
+      // y limpia el pendingWrite) mientras en disco solo quedaba la carpeta
+      // vacia que creo `getDirectoryHandle(..., {create:true})` mas arriba.
+      // Pasaba el 2026-09-07 con la escena 12 de idea_000024: regenerada dos
+      // veces, "12/12 completados" en el popup y cero archivos. El `catch` de
+      // abajo solo cubre excepciones, y un fetch fallido devuelve null sin
+      // lanzar, asi que se colaba derecho al WriteDone.
+      if (validBlobs.length === 0) {
+        browser.runtime
+          .sendMessage({
+            action: Actions.SceneFailed,
+            sceneNumber: pw.sceneNumber,
+            reason: `No se pudo descargar el medio de la escena ${pw.sceneNumber} (${pw.urls.length} URL(s) fallaron)`,
+          })
+          .catch(() => {});
+        return;
       }
+
+      const refName =
+        pw.mode === BatchModes.Image
+          ? sceneRefImageName(pw.sceneNumber)
+          : sceneRefVideoName(pw.sceneNumber);
+      await writeBlobToFile(rootDir, refName, validBlobs[0]);
 
       browser.runtime
         .sendMessage({ action: Actions.WriteDone, sceneNumber: pw.sceneNumber })

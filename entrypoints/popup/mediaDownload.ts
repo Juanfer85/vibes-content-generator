@@ -27,15 +27,26 @@ export async function fetchBlobWithRetry(url: string): Promise<Blob | null> {
     }
   }
 
+  // Se guarda la ultima causa para poder decirla al rendirse: sin esto, una
+  // descarga que agota los 3 intentos devuelve null en silencio absoluto y no
+  // queda rastro de si fue 403 (URL de Flow expirada), timeout o red caida.
+  let ultimaCausa = 'sin detalle';
+
   for (let attempt = 0; attempt < FETCH_RETRIES; attempt++) {
     try {
       const resp = await fetchWithTimeout(url);
       if (resp.ok) return await resp.blob();
-    } catch {
-      /* network error or timeout — retry below */
+      ultimaCausa = `HTTP ${resp.status}`;
+    } catch (err) {
+      ultimaCausa = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
     }
     if (attempt < FETCH_RETRIES - 1) await sleep(RETRY_BACKOFF_MS[attempt]);
   }
+
+  console.error(
+    `[fetchBlobWithRetry] se agotaron los ${FETCH_RETRIES} intentos, ultima causa: ${ultimaCausa}`,
+    { url }
+  );
   return null;
 }
 
