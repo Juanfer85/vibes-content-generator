@@ -143,6 +143,19 @@ async function waitForBatch(
     const readyUrls = states.flatMap((s) => (s.status === SlotStatuses.Ready ? [s.url] : []));
 
     if (!stillPending || Date.now() >= deadline) {
+      // Diagnostico (2026-09-14): sin esto, un "NoSuccess" no dice si el
+      // batch de verdad fallo (4 slots Failed) o si simplemente se agoto el
+      // tiempo con slots todavia Pending -- que es indistinguible desde
+      // afuera de "sigue generando en bucle" pero tiene una causa y un fix
+      // muy distintos (ver el comentario de IMAGE_BATCH_SETTLE_TIMEOUT_MS).
+      if (readyUrls.length === 0) {
+        console.warn('[waitForBatch] NoSuccess', {
+          batchId,
+          settleTimeoutMs,
+          elapsedMs: Date.now() - (deadline - settleTimeoutMs),
+          estados: states.map((s) => s.status),
+        });
+      }
       return readyUrls.length > 0
         ? { status: BatchResults.Success, urls: readyUrls }
         : { status: BatchResults.NoSuccess };

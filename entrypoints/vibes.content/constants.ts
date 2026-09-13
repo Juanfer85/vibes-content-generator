@@ -7,9 +7,20 @@ export const MEDIA_POLL_INTERVAL_MS = 2000;
 // guards against looping forever if the click silently didn't register.
 export const BATCH_ID_CAPTURE_TIMEOUT_MS = 15000;
 // Once a batch's id is known, how long to wait for its up to 4 slots to
-// settle (each becomes 'ready' or 'failed') before deciding with whatever
-// succeeded so far. Video takes longer than image, so it gets more room.
-export const IMAGE_BATCH_SETTLE_TIMEOUT_MS = 45000;
+// settle (each becomes 'ready' o 'failed') before deciding with whatever
+// succeeded so far.
+//
+// Subido de 45s a 90s el 2026-09-14: con 45s, una escena que tardaba mas de
+// lo normal (carga del sitio, o el propio Vibes mas lento tras muchos
+// intentos seguidos) se daba por NoSuccess y DISPARABA OTRA generacion
+// nueva antes de que la anterior terminara -- eso se ve, desde afuera, como
+// un bucle infinito regenerando la misma escena, aunque cada intento fuera
+// una generacion real y valida a la que nunca se le dio tiempo de terminar.
+// Confirmado en vivo: la misma escena, pegada a mano en Vibes sin la
+// extension, genero bien -- el prompt y el sitio estaban sanos, el limite
+// de tiempo era el problema. Video ya tenia mas margen (75s) por la misma
+// razon de fondo; imagen ahora se acerca a eso en vez de quedar tan corto.
+export const IMAGE_BATCH_SETTLE_TIMEOUT_MS = 90000;
 export const VIDEO_BATCH_SETTLE_TIMEOUT_MS = 75000;
 export const MAX_UPLOAD_ATTEMPTS = 5;
 export const UPLOAD_RETRY_DELAY_MS = 12000;
