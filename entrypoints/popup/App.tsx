@@ -13,7 +13,12 @@ import {
 import { BatchMode } from './components/BatchMode';
 import { HowToUseMode } from './components/HowToUseMode';
 import { StatusPanel } from './components/StatusPanel';
-import { fetchBlobWithRetry, writeBlobToFile, blurWatermarkCorner } from './mediaDownload';
+import {
+  fetchBlobWithRetry,
+  writeBlobToFile,
+  blurWatermarkCorner,
+  pickFirstWithoutWhiteBorder,
+} from './mediaDownload';
 import { AppModes } from './App.types';
 import type { AppMode, LogStatus } from './App.types';
 import './style.css';
@@ -89,7 +94,30 @@ export default function App() {
         pw.mode === BatchModes.Image
           ? sceneRefImageName(pw.sceneNumber)
           : sceneRefVideoName(pw.sceneNumber);
-      await writeBlobToFile(rootDir, refName, validBlobs[0]);
+
+      // Filtro del marco blanco de "pagina de comic" (2026-09-13): Flow y
+      // Vibes lo dibujan cada vez mas seguido pese a la instruccion
+      // anti-panel del prompt -- eso reduce la frecuencia, no la elimina.
+      // Solo aplica a imagenes; un video no tiene este defecto.
+      let elegido = validBlobs[0];
+      if (pw.mode === BatchModes.Image) {
+        const sinMarco = await pickFirstWithoutWhiteBorder(validBlobs);
+        if (!sinMarco) {
+          browser.runtime
+            .sendMessage({
+              action: Actions.SceneFailed,
+              sceneNumber: pw.sceneNumber,
+              reason:
+                `Las ${validBlobs.length} variante(s) de la escena ${pw.sceneNumber} ` +
+                'salieron con marco blanco de pagina de comic.',
+            })
+            .catch(() => {});
+          return;
+        }
+        elegido = sinMarco;
+      }
+
+      await writeBlobToFile(rootDir, refName, elegido);
 
       browser.runtime
         .sendMessage({ action: Actions.WriteDone, sceneNumber: pw.sceneNumber })
