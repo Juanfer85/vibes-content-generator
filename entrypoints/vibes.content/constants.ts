@@ -22,6 +22,16 @@ export const BATCH_ID_CAPTURE_TIMEOUT_MS = 15000;
 // razon de fondo; imagen ahora se acerca a eso en vez de quedar tan corto.
 export const IMAGE_BATCH_SETTLE_TIMEOUT_MS = 90000;
 export const VIDEO_BATCH_SETTLE_TIMEOUT_MS = 75000;
+// Refresco de la galeria de video (2026-09-18). Vibes termina de generar
+// (desaparece el aviso "Generando...") pero NO repinta las 4 tarjetas: quedan
+// en blanco hasta que el usuario abre una y vuelve con la flecha, que obliga a
+// redibujar la galeria. La extension ya detecta los clips en cuanto aparecen
+// (verificado: al volver, "4 archivo(s) listo(s)" sale al instante), asi que
+// lo unico que falta es provocar ese redibujado. Medido en vivo: el aviso
+// desaparece a los ~35 s, por eso el primer intento va a los 40 s.
+export const GALLERY_NUDGE_AFTER_MS = 40000;
+export const GALLERY_NUDGE_EVERY_MS = 20000;
+export const GALLERY_NUDGE_MAX = 2;
 export const MAX_UPLOAD_ATTEMPTS = 5;
 export const UPLOAD_RETRY_DELAY_MS = 12000;
 // If clicking confirm doesn't close the upload dialog, the file itself is

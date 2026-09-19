@@ -6,9 +6,12 @@ import {
   MAX_GENERATION_ATTEMPTS,
   GENERATION_RETRY_DELAY_MS,
   READY_VIDEO_URL_PATTERN,
+  GALLERY_NUDGE_AFTER_MS,
+  GALLERY_NUDGE_EVERY_MS,
+  GALLERY_NUDGE_MAX,
 } from './constants';
 import { aborted } from './abortState';
-import { sleep, sleepAbortable } from './domUtils';
+import { sleep, sleepAbortable, simulateClick } from './domUtils';
 import { log } from './log';
 
 // ── Gallery reading ────────────────────────────────────────────────────────────
@@ -69,15 +72,23 @@ function getSlotState(mediaId: string, mode: BatchMode): SlotState {
       url = !!img && img.complete && img.naturalWidth > 0 && img.src;
     } else {
       const video = card.querySelector<HTMLVideoElement>('video[src]');
-      // readyState confirms the browser actually has data for this src, not
-      // just that the attribute was assigned — the <video> tag can mount
-      // with src set slightly before the file is truly fetchable. The URL
-      // pattern is a second check: a finished video's src is always a
-      // final CDN URL, never a placeholder.
-      const videoReady =
-        !!video &&
-        video.readyState >= HTMLMediaElement.HAVE_METADATA &&
-        READY_VIDEO_URL_PATTERN.test(video.src);
+      // El src final de fbcdn ES la prueba de que el archivo existe:
+      // vibes.ai no lo asigna mientras el video se genera (hasta entonces
+      // la tarjeta lleva un <canvas> de esqueleto).
+      //
+      // Ya NO se mira `readyState` (2026-09-17). Sube de 0 solo cuando el
+      // navegador descarga datos de verdad, y la galeria monta sus <video>
+      // sin cargarlos mientras estan fuera de foco. Resultado: el batch se
+      // quedaba en Pending hasta agotar el tiempo aunque los 4 clips ya
+      // estuvieran listos, y solo se desbloqueaba si alguien abria un clip
+      // a mano y volvia -- eso era lo que forzaba la descarga.
+      const videoReady = !!video && READY_VIDEO_URL_PATTERN.test(video.src);
+      if (videoReady && video.readyState === HTMLMediaElement.HAVE_NOTHING) {
+        // Empuja la carga para que los clips se vean en la galeria sin que
+        // el usuario tenga que abrir uno. No condiciona el resultado.
+        video.preload = 'metadata';
+        video.load();
+      }
       url = videoReady && video.src;
     }
     if (url) return { status: SlotStatuses.Ready, url };
@@ -91,6 +102,42 @@ function getSlotState(mediaId: string, mode: BatchMode): SlotState {
   }
 
   return { status: SlotStatuses.Pending };
+}
+
+// Hace lo mismo que el usuario a mano: abrir una tarjeta y volver, para que
+// vibes.ai redibuje la galeria. Sin selectores del boton "volver" (no los
+// conocemos): se usa el historial del navegador, protegido para no sacar al
+// usuario del proyecto. Solo vuelve atras si el clic realmente cambio la URL;
+// si no cambio (p. ej. un panel superpuesto) cierra con Escape, y si despues de
+// volver la URL no coincide con la de partida, lo deja anotado y no toca mas.
+async function nudgeGallery(preferredMediaId: string): Promise<void> {
+  const escaped = CSS.escape(preferredMediaId);
+  const card =
+    document.querySelector<HTMLElement>(
+      `${GallerySelectors.Thumbnail}[data-analytics-media-id="${escaped}"]`
+    ) ?? document.querySelector<HTMLElement>(GallerySelectors.Thumbnail);
+  if (!card) {
+    console.warn('[nudgeGallery] no hay ninguna tarjeta que abrir');
+    return;
+  }
+
+  const urlAntes = location.href;
+  await simulateClick(card);
+  if (aborted) return;
+
+  if (location.href !== urlAntes) {
+    history.back();
+    await sleep(2000);
+    console.warn('[nudgeGallery] abrio y volvio', {
+      urlAntes,
+      urlDespues: location.href,
+      coincide: location.href === urlAntes,
+    });
+  } else {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await sleep(1000);
+    console.warn('[nudgeGallery] el clic no cambio la URL, se cerro con Escape', { urlAntes });
+  }
 }
 
 // ── Batch waiting ──────────────────────────────────────────────────────────────
@@ -134,6 +181,7 @@ async function waitForBatch(
   // runs out, whichever comes first.
   const slotIds = [0, 1, 2, 3].map((n) => `${batchId}-content-${n}`);
   const deadline = Date.now() + settleTimeoutMs;
+  let nudges = 0;
 
   while (true) {
     if (aborted) return { status: BatchResults.Aborted };
@@ -141,6 +189,21 @@ async function waitForBatch(
     const states = slotIds.map((id) => getSlotState(id, mode));
     const stillPending = states.some((s) => s.status === SlotStatuses.Pending);
     const readyUrls = states.flatMap((s) => (s.status === SlotStatuses.Ready ? [s.url] : []));
+
+    // Solo video, que es donde se documento el fallo de repintado.
+    const elapsedMs = Date.now() - (deadline - settleTimeoutMs);
+    if (
+      mode === BatchModes.Video &&
+      stillPending &&
+      nudges < GALLERY_NUDGE_MAX &&
+      elapsedMs >= GALLERY_NUDGE_AFTER_MS + nudges * GALLERY_NUDGE_EVERY_MS &&
+      Date.now() < deadline
+    ) {
+      nudges++;
+      console.warn('[waitForBatch] refrescando la galeria', { intento: nudges, elapsedMs });
+      await nudgeGallery(slotIds[0]);
+      continue;
+    }
 
     if (!stillPending || Date.now() >= deadline) {
       // Diagnostico (2026-09-14): sin esto, un "NoSuccess" no dice si el
