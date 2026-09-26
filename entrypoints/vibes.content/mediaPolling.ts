@@ -13,6 +13,7 @@ import {
 import { aborted } from './abortState';
 import { sleep, sleepAbortable, simulateClick } from './domUtils';
 import { log } from './log';
+import { takeAttemptFailure } from './attemptFailure';
 
 // ── Gallery reading ────────────────────────────────────────────────────────────
 
@@ -47,6 +48,34 @@ type SlotState =
   | { status: typeof SlotStatuses.Ready; url: string }
   | { status: typeof SlotStatuses.Failed }
   | { status: typeof SlotStatuses.Pending };
+
+// Diagnostico (2026-09-18): cuando un batch de video termina con espacios
+// sin resolver, no hay forma de saber desde afuera POR QUE. El usuario ve
+// tarjetas en blanco que solo se pintan si abre una y vuelve -- la extension
+// las da por pendientes porque `getSlotState` exige que el id aparezca mas de
+// una vez, y una tarjeta sin pintar no lo cumple. Esto anota que hay de
+// verdad en la pagina para cada espacio, sin cambiar el comportamiento.
+function describeSlot(mediaId: string) {
+  const escapedId = CSS.escape(mediaId);
+  const repeats = document.querySelectorAll(`[data-analytics-media-id="${escapedId}"]`).length;
+  const card = document.querySelector<HTMLElement>(
+    `${GallerySelectors.Thumbnail}[data-analytics-media-id="${escapedId}"]`
+  );
+  if (!card) return { mediaId, repeats, card: false };
+  const video = card.querySelector<HTMLVideoElement>('video');
+  return {
+    mediaId,
+    repeats,
+    card: true,
+    canvas: !!card.querySelector('canvas'),
+    img: !!card.querySelector('img'),
+    video: !!video,
+    videoSrc: video?.getAttribute('src')?.slice(0, 90) ?? null,
+    readyState: video?.readyState ?? null,
+    alto: Math.round(card.getBoundingClientRect().height),
+    texto: (card.textContent ?? '').trim().slice(0, 40),
+  };
+}
 
 // A slot's mediaId is stamped on more than one element once it's ready —
 // vibes.ai adds hover-action buttons (favorite, delete) carrying the same
@@ -211,6 +240,16 @@ async function waitForBatch(
       // tiempo con slots todavia Pending -- que es indistinguible desde
       // afuera de "sigue generando en bucle" pero tiene una causa y un fix
       // muy distintos (ver el comentario de IMAGE_BATCH_SETTLE_TIMEOUT_MS).
+      if (states.some((st) => st.status !== SlotStatuses.Ready)) {
+        console.warn('[waitForBatch] espacios sin resolver', {
+          batchId,
+          modo: mode,
+          listos: readyUrls.length,
+          detalle: slotIds
+            .map((id, i) => ({ estado: states[i].status, ...describeSlot(id) }))
+            .filter((d) => d.estado !== SlotStatuses.Ready),
+        });
+      }
       if (readyUrls.length === 0) {
         console.warn('[waitForBatch] NoSuccess', {
           batchId,
@@ -276,7 +315,11 @@ export async function generateWithRetries(
 
     const attempted = await generateAttempt();
     if (!attempted) {
-      await reportSceneFailed(sceneNumber, 'Botón Generate no disponible.', retryAfterMs);
+      await reportSceneFailed(
+        sceneNumber,
+        takeAttemptFailure() ?? 'Botón Generate no disponible.',
+        retryAfterMs
+      );
       return;
     }
 

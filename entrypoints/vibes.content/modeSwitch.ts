@@ -2,6 +2,7 @@ import { BatchModes, type BatchMode } from '../../lib/types';
 import { ComposerSelectors } from '../../lib/selectors/vibes';
 import { sleep, sleepAbortable, simulateClick, waitFor, waitForEnabledButton } from './domUtils';
 import { aborted } from './abortState';
+import { setAttemptFailure } from './attemptFailure';
 
 // ── Mode management ───────────────────────────────────────────────────────────
 
@@ -104,12 +105,45 @@ export async function fillComposer(prompt: string, timeoutMs = 5000): Promise<HT
 // empty/stale composer), then clicks once the button is enabled.
 export function createGenerateAttempt(
   prompt: string,
-  buttonSelector: string
+  buttonSelector: string,
+  // Comprobacion previa opcional (video: que el start frame siga adjunto).
+  // Devuelve null si todo esta bien, o el motivo del fallo.
+  precondition?: () => Promise<string | null>
 ): () => Promise<boolean> {
   return async () => {
-    if (!(await fillComposer(prompt))) return false;
+    const reject = (motivo: string) => {
+      setAttemptFailure(motivo);
+      return false;
+    };
+
+    if (precondition) {
+      const problem = await precondition();
+      if (problem) return reject(problem);
+    }
+
+    const composer = await fillComposer(prompt);
+    if (!composer) return false;
     await sleepAbortable(1300);
     if (aborted) return false;
+    if (!(await waitForEnabledButton(buttonSelector)) || aborted) return false;
+
+    // Ultimo control antes de pulsar (2026-09-17/18). En modo VIDEO el boton se
+    // habilita con el start frame O con texto: con uno de los dos basta. Por
+    // eso hay que volver a mirar AMBOS justo antes del clic:
+    //  - si el editor se vacio en la espera, vibes.ai animaba SIN prompt;
+    //  - si el start frame se perdio, vibes.ai generaba un video SOLO desde el
+    //    texto, sin animar la imagen.
+    // Verificar al escribir o adjuntar no basta. Si re-adjuntar el frame limpia
+    // el editor, el prompt se comprueba DESPUES.
+    if (precondition) {
+      const problem = await precondition();
+      if (problem) return reject(problem);
+    }
+    if (composer.textContent.trim() !== prompt.trim()) {
+      if (!(await fillComposer(prompt))) return false;
+      if (aborted) return false;
+    }
+
     const btn = await waitForEnabledButton(buttonSelector);
     if (!btn || aborted) return false;
     await simulateClick(btn);

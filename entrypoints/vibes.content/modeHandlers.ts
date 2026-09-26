@@ -8,7 +8,7 @@ import {
 } from './constants';
 import { log } from './log';
 import { ensureMode, createGenerateAttempt } from './modeSwitch';
-import { attachStartFrame, removeStartFrame } from './startFrame';
+import { attachStartFrame, removeStartFrame, hasStartFrame } from './startFrame';
 import { generateWithRetries, reportSceneFailed } from './mediaPolling';
 
 // ── Mode handlers ─────────────────────────────────────────────────────────────
@@ -74,7 +74,25 @@ export async function handleVideoMode(
     return;
   }
 
-  const generateAttempt = createGenerateAttempt(prompt, GenerateButtonSelectors.Video);
+  // Antes de CADA intento, y justo antes de pulsar Generate, el start frame
+  // tiene que seguir adjunto; si se perdio se vuelve a adjuntar, y si no hay
+  // forma se aborta la escena en vez de gastar un video sin la imagen.
+  const ensureStartFrame = async (): Promise<string | null> => {
+    if (hasStartFrame()) return null;
+    console.warn('[handleVideoMode] falta el start frame antes de generar, se re-adjunta', {
+      sceneNumber,
+    });
+    const ok = await attachStartFrame(imageBase64, imageName, sceneNumber);
+    return ok && hasStartFrame()
+      ? null
+      : 'No se confirmó el start frame: no se genera para no gastar un video sin la imagen.';
+  };
+
+  const generateAttempt = createGenerateAttempt(
+    prompt,
+    GenerateButtonSelectors.Video,
+    ensureStartFrame
+  );
 
   await generateWithRetries(
     sceneNumber,

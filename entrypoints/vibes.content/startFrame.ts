@@ -102,14 +102,35 @@ function closeAnyOpenDialog() {
   document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', code: 'Escape', ...opts }));
 }
 
-export async function removeStartFrame(): Promise<void> {
-  const btn = Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find(
+function findRemoveStartFrameButton(): HTMLButtonElement | undefined {
+  return Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find(
     (el) =>
       el.className.includes(REMOVE_FRAME_BUTTON_SIZE_CLASS) &&
       Array.from(el.querySelectorAll('svg path')).some((p) =>
         (p.getAttribute('d') ?? '').startsWith(CLOSE_ICON_PATH)
       )
   );
+}
+
+// Nombre unico del ultimo archivo subido: la miniatura del start frame ya
+// puesto en el compositor lleva ese nombre como alt.
+let lastUploadName: string | null = null;
+
+// Hay un start frame realmente adjunto? Dos senales: el boton "x" de quitarlo
+// (solo existe si hay miniatura), o la propia imagen subida fuera de un dialogo.
+// (2026-09-18) Antes se daba por adjuntado con solo haber hecho clic en "Add to
+// video", y si ese clic no prosperaba se generaba un video SOLO desde el texto.
+export function hasStartFrame(): boolean {
+  if (findRemoveStartFrameButton()) return true;
+  if (!lastUploadName) return false;
+  const img = document.querySelector<HTMLImageElement>(
+    `img[alt="${CSS.escape(lastUploadName)}"]`
+  );
+  return !!img && !img.closest('[role="dialog"]');
+}
+
+export async function removeStartFrame(): Promise<void> {
+  const btn = findRemoveStartFrameButton();
   if (!btn) return;
   await simulateClick(btn);
 }
@@ -177,6 +198,7 @@ async function attemptUpload(imageBase64: string, imageName: string): Promise<Up
   // run could've already left a same-named file in this vibes.ai project, so
   // upload under a unique name instead to unambiguously find *this* upload.
   const uploadName = `${crypto.randomUUID()}-${imageName}`;
+  lastUploadName = uploadName;
   const file = dataURLtoFile(imageBase64, uploadName);
   const dt = new DataTransfer();
   dt.items.add(file);
@@ -273,7 +295,7 @@ async function uploadWithRetries(
   return uploadResult;
 }
 
-export async function attachStartFrame(
+async function attachStartFrameOnce(
   imageBase64: string,
   imageName: string,
   sceneNumber: number
@@ -330,5 +352,38 @@ export async function attachStartFrame(
   if (!addToVideoBtn) return false;
   await simulateClick(addToVideoBtn);
 
+  // El clic no prueba que la imagen quedo adjunta: hay que verlo.
+  const confirmed = await waitFor(() => (hasStartFrame() ? true : null), 6000);
+  if (!confirmed) {
+    console.warn('[attachStartFrame] no se confirmo el start frame tras Add to video', {
+      sceneNumber,
+    });
+    return false;
+  }
   return true;
+}
+
+const MAX_ATTACH_ATTEMPTS = 2;
+
+export async function attachStartFrame(
+  imageBase64: string,
+  imageName: string,
+  sceneNumber: number
+): Promise<boolean> {
+  lastUploadName = null;
+  // Un start frame que quedo de la escena anterior haria que el boton anadir
+  // habilitado fuera el de END frame, no el de start: se quita antes.
+  if (hasStartFrame()) {
+    console.warn('[attachStartFrame] habia un start frame previo, se quita', { sceneNumber });
+    await removeStartFrame();
+    await sleep(800);
+  }
+
+  for (let attempt = 1; attempt <= MAX_ATTACH_ATTEMPTS; attempt++) {
+    if (aborted) return false;
+    if (await attachStartFrameOnce(imageBase64, imageName, sceneNumber)) return true;
+    closeAnyOpenDialog();
+    await sleepAbortable(3000);
+  }
+  return false;
 }
